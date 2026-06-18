@@ -1,0 +1,133 @@
+<style>
+  body, table, td, p {
+    margin: 0;
+    padding: 0;
+  }
+  img {
+    border: 0;
+    line-height: 100%;
+    outline: none;
+    text-decoration: none;
+  }
+  table {
+    border-collapse: collapse !important;
+  }
+  body {
+    width: 100% !important;
+    height: 100% !important;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #e9eef0;
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+  }
+  .wrapper {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 24px 12px;
+  }
+  .card {
+    background: #eef3f2;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  }
+  .header-simple {
+    background: #1e4578;
+    color: #ffffff;
+    text-align: center;
+    padding: 32px 24px;
+  }
+  .header-simple h1 {
+    font-size: 22px;
+    line-height: 1.3;
+    margin: 0 0 6px 0;
+    font-weight: 700;
+  }
+  .header-simple h2 {
+    font-size: 18px;
+    line-height: 1.35;
+    margin: 0 0 6px 0;
+    font-weight: 600;
+  }
+  .header-simple p {
+    font-size: 16px;
+    margin: 0;
+    opacity: 0.95;
+  }
+  .content {
+    padding: 36px 40px 42px 40px;
+    color: #1f2933;
+  }
+  .content p {
+    font-size: 15px;
+    line-height: 1.6;
+    margin: 0 0 14px 0;
+  }
+  .content a {
+    color: #1d4ed8;
+    font-weight: 600;
+    text-decoration: underline;
+  }
+  @media (max-width: 600px) {
+    .content {
+      padding: 28px 22px 32px 22px;
+    }
+    .header-simple {
+      padding: 28px 18px;
+    }
+    .header-simple h1 {
+      font-size: 20px;
+    }
+    .header-simple h2 {
+      font-size: 17px;
+    }
+    .header-simple p {
+      font-size: 15px;
+    }
+  }
+</style>
+<center class="wrapper" role="article" aria-roledescription="email" lang="en">
+  <table role="presentation" width="100%">
+    <tr>
+      <td>
+        <div class="card">
+          <!-- HEADER -->
+          <div class="header-simple">
+            <h1>Ted Thomas</h1>
+            <h2>Intensive Business Growth System (IBGS)</h2>
+            <p>Lesson 3 - Interactive Session</p>
+            <p style="margin-top: 10px; font-weight: 600;">
+              Starting in 1 Hour - 3:00 PM Eastern
+            </p>
+          </div>
+          <!-- BODY -->
+          <div class="content">
+            <p>Hi {{ subscriber.first_name }},</p>
+            <p>This is a reminder that we are live today at <strong>3:00 PM Eastern for Intensive Business Growth System — Lesson 3</strong>.</p>
+            <p>
+              <a href="{{ subscriber.ibgs_link }}" target="_blank" rel="noopener">Join the live webinar here</a>
+            </p>
+            <p>
+              In today's lesson, Ted will continue building on the foundation from the first two classes and introduce additional concepts that will help you better understand how to identify opportunities and move forward with confidence.
+            </p>
+            <p>
+              Each lesson builds on the previous one, so be sure to attend live, take notes, and participate in the discussion.
+            </p>
+            <p>
+              <strong>Ted requests that all students be on webcam during class.</strong> This is an interactive training, and participation is important.
+            </p>
+            <p>
+              Please come prepared with your questions and be ready to engage.
+            </p>
+            <p>
+              We look forward to seeing you in class.
+            </p>
+            <p>
+              Ted Thomas Team
+            </p>
+          </div>
+      </td>
+    </tr>
+  </table>
+</center>
+{{ message_content }}
