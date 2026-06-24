@@ -1,0 +1,7 @@
+# Copy to .dev.vars for local testing (wrangler dev)
+# Never commit .dev.vars to git.
+
+SLACK_BOT_TOKEN=xoxb-your-slack-bot-token
+ANTHROPIC_API_KEY=sk-ant-your-anthropic-key
+KIT_API_KEY=your-kit-v4-api-key
+ADMIN_TOKEN=some-long-random-string

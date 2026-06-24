@@ -1,0 +1,59 @@
+name = "training-reminders"
+main = "src/worker.js"
+compatibility_date = "2024-01-01"
+
+# KV namespace for templates + pending approvals
+# Create with: wrangler kv:namespace create KV
+# Then paste the ID below.
+[[kv_namespaces]]
+binding = "KV"
+id = "YOUR_KV_NAMESPACE_ID"
+
+# Cron triggers (UTC times). The first cron is Phase 1 (draft); every other
+# cron is an approval sweep (Phase 2). Times are EDT (UTC-4); in EST they shift
+# one hour earlier, but actual send times are computed dynamically and stay correct.
+#
+# Phase 1: 15:00 UTC = 11:00 AM EDT
+#   Reads Slack, creates drafts / auto-schedules, posts previews
+#
+# Phase 2: 12:15–1:55 PM EDT, every 20 min (16:15,16:35,16:55,17:15,17:35,17:55 UTC)
+#   Repeatedly checks for "go ahead" replies so a late approval still sends.
+#   Covers the 2 PM ET training sends and the 3 PM ET IBGS send.
+#
+[triggers]
+crons = ["0 15 * * 1,2,4,5", "15,35,55 16,17 * * 1,2,4,5"]
+
+# Secrets (set via: wrangler secret put <NAME>)
+#   SLACK_BOT_TOKEN    - xoxb-... Slack bot token
+#   ANTHROPIC_API_KEY  - sk-ant-... Anthropic key
+#   KIT_API_KEY        - Kit V4 API key
+#   ADMIN_TOKEN        - shared secret guarding all non-health HTTP endpoints
+
+[vars]
+# Must match the Phase 1 cron above (used for phase detection).
+PHASE1_CRON = "0 15 * * 1,2,4,5"
+
+# Slack channel where hosts post updates AND where previews/confirmations go
+SLACK_CHANNEL_ID = "C0XXXXXXXXX"
+
+# Host Slack user IDs (profile > three dots > Copy member ID)
+DAVID_SLACK_ID = "U0XXXXXXXXX"
+LANCE_SLACK_ID = "U0XXXXXXXXX"
+JEFF_SLACK_ID  = "U0XXXXXXXXX"
+
+# Kit email layout template ID (shared across all broadcasts)
+# Find via: curl -H "X-Kit-Api-Key: KEY" https://api.kit.com/v4/email_templates
+KIT_EMAIL_TEMPLATE_ID = "0"
+
+# Per-session subscriber filters
+# You can set these per-session or use a default for all.
+# Format: KIT_{SESSION_KEY_UPPERCASE}_FILTER_TYPE and _FILTER_ID
+# Session keys: MON_TRAINING, TUE_TRAINING, THU_TRAINING, THU_IBGS, FRI_TRAINING
+#
+# Example for per-session targeting:
+#   KIT_MON_TRAINING_FILTER_TYPE = "tag"
+#   KIT_MON_TRAINING_FILTER_ID = "12345"
+#
+# Or use defaults for all:
+KIT_DEFAULT_FILTER_TYPE = "tag"
+KIT_DEFAULT_FILTER_ID = "0"
