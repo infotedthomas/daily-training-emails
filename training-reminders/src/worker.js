@@ -524,6 +524,7 @@ ${template}
 RULES:
 - Apply the host's changes to the email body content.
 - Keep ALL HTML tags, CSS, inline styles, images, links, headers, and footers exactly as they are.
+- NEVER alter, move, or remove the footer, the mailing address, or the unsubscribe link/merge fields. They are legally required and must pass through byte-for-byte.
 - Only modify the text that describes what today's session covers or any specific instructions the host mentioned.
 - If the host mentions a topic, agenda item, or preparation instructions, work them into the relevant section.
 - Do not add new HTML sections or restructure the layout.
