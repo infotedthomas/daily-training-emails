@@ -212,6 +212,12 @@
     <!-- FOOTER -->
     <div class="footer">
       <p class="footer-signature">The Ted Thomas Training Facilitator Team</p>
+      <p style="font-size: 12px; color: #999; margin-top: 14px;">{{ address }}</p>
+      <p style="font-size: 12px; color: #999; margin-top: 4px;">
+        <a href="{{ unsubscribe_url }}" style="color: #999; text-decoration: underline;">Unsubscribe</a>
+        &middot;
+        <a href="{{ subscriber_preferences_url }}" style="color: #999; text-decoration: underline;">Preferences</a>
+      </p>
     </div>
 
   </div>
