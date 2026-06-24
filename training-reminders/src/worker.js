@@ -48,7 +48,7 @@ function buildSessions(env) {
       sendHour: 13, sendMinute: 0,
       sessionTime: '2:00 PM ET',
       templateKey: 'template:thursday',
-      defaultSubject: 'Reminder: Training Session Today at 2 PM ET',
+      defaultSubject: 'Coach Jeff Austin Training Session starts at 2:00PM',
     },
     {
       key: 'thu-ibgs',
@@ -104,7 +104,27 @@ export default {
 
     // Health check is the only unauthenticated route.
     if (url.pathname === '/' && request.method === 'GET') {
-      return json({ status: 'ok', service: 'training-reminders', version: '2.1' });
+      return json({ status: 'ok', service: 'training-reminders', version: '2.2' });
+    }
+
+    // Email preview — rendered HTML of a broadcast, openable from a browser link.
+    // Uses a separate low-privilege token (PREVIEW_TOKEN) so the link can be
+    // posted in Slack without exposing the admin token. ADMIN_TOKEN also works.
+    if (url.pathname === '/preview' && request.method === 'GET') {
+      const t = url.searchParams.get('token');
+      if (!env.ADMIN_TOKEN || (t !== env.ADMIN_TOKEN && t !== env.PREVIEW_TOKEN)) {
+        return json({ error: 'Unauthorized' }, 401);
+      }
+      const id = url.searchParams.get('broadcast');
+      if (!id) return json({ error: 'Pass ?broadcast=ID' }, 400);
+      const r = await fetch(`https://api.kit.com/v4/broadcasts/${id}`, {
+        headers: { 'X-Kit-Api-Key': env.KIT_API_KEY },
+      });
+      if (!r.ok) return json({ error: `Kit get broadcast ${r.status}` }, 502);
+      const b = (await r.json()).broadcast;
+      return new Response(b.content || '<p>(no content)</p>', {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
     }
 
     // Everything else requires the admin token.
@@ -123,9 +143,14 @@ export default {
       const sessions = buildSessions(env);
       const session = sessions.find(s => s.key === key);
       if (!session) return json({ error: 'Unknown session', valid: sessions.map(s => s.key) }, 400);
-      const result = await processSingleSession(session, env);
-      // Mark done so the scheduled cron won't re-process and double-send.
-      await env.KV.put(`done:${session.key}:${getTodayDateET()}`, JSON.stringify(result), { expirationTtl: 86400 });
+      // SAFE BY DEFAULT: /trigger does a dry run (draft only, never sends).
+      // Pass ?live=1 to actually run the real schedule/send path.
+      const dryRun = url.searchParams.get('live') !== '1';
+      const result = await processSingleSession(session, env, dryRun);
+      // Only mark done on a real run, so the cron won't re-process & double-send.
+      if (!dryRun) {
+        await env.KV.put(`done:${session.key}:${getTodayDateET()}`, JSON.stringify(result), { expirationTtl: 86400 });
+      }
       return json(result);
     }
 
@@ -230,7 +255,7 @@ async function runDraftPhase(env) {
   return { phase: 'draft', dayOfWeek: todayDow, results };
 }
 
-async function processSingleSession(session, env) {
+async function processSingleSession(session, env, dryRun = false) {
   const host = getHost(session.host, env);
 
   // 1. Read Slack for relevant messages
@@ -287,18 +312,39 @@ async function processSingleSession(session, env) {
     emailTemplateId: kitTemplateId > 0 ? kitTemplateId : undefined,
   };
 
+  // Dry run (the DEFAULT for manual /trigger): create a DRAFT only — never set
+  // send_at, never schedule, never store a pending approval. This path cannot
+  // send to anyone. A real send requires the cron, or /trigger?live=1.
+  if (dryRun) {
+    const broadcast = await createKitBroadcast(broadcastPayload, env); // no sendAt → draft
+    const previewUrl = env.WORKER_URL
+      ? `${env.WORKER_URL}/preview?broadcast=${broadcast.id}&token=${env.PREVIEW_TOKEN || ''}`
+      : null;
+    await postToSlack(env, [
+      `:test_tube: *${session.label}* — DRY RUN draft created (will NOT send).`,
+      `Subject: ${subject}`,
+      previewUrl ? `:eyes: *Preview the email:* ${previewUrl}` : null,
+    ].filter(Boolean).join('\n'));
+    return { session: session.key, action: 'dry_run', broadcastId: broadcast.id };
+  }
+
   if (needsApproval) {
     // Draft only — no send_at
     const broadcast = await createKitBroadcast(broadcastPayload, env);
+
+    const previewUrl = env.WORKER_URL
+      ? `${env.WORKER_URL}/preview?broadcast=${broadcast.id}&token=${env.PREVIEW_TOKEN || ''}`
+      : null;
 
     const previewMsg = await postToSlack(env, [
       `:memo: *${session.label}* — Draft ready with changes.`,
       `Subject: ${subject}`,
       `Changes from ${host.name}: "${truncate(intent.text, 150)}"`,
+      previewUrl ? `:eyes: *Preview the email:* ${previewUrl}` : null,
       ``,
       `Reply *go ahead* to schedule for ${formatTime(session.sendHour, session.sendMinute)} ET.`,
       `Reply *cancel* to discard.`,
-    ].join('\n'));
+    ].filter(Boolean).join('\n'));
 
     // Store pending approval
     const pendingKey = `pending:${session.key}:${getTodayDateET()}`;
@@ -522,13 +568,12 @@ HERE IS THE CURRENT HTML EMAIL:
 ${template}
 
 RULES:
-- Apply the host's changes to the email body content.
-- Keep ALL HTML tags, CSS, inline styles, images, links, headers, and footers exactly as they are.
+- Make the SMALLEST possible edit. Change ONLY the paragraph(s) that describe what the session covers (its topic/agenda) and add any preparation instructions the host gave.
+- Keep EVERYTHING ELSE byte-for-byte: the <h1> title, the header subtitle/tagline, the greeting line, the "Quick reminder – ... is today at ..." line, the weekly schedule, the button, all HTML tags, CSS, styles, links, and the footer.
+- NEVER change the host's name, the session title, or the branding wording. The host's message is a brief; do not copy its phrasing (e.g. "Jeff's Thursday training") into the title or headings.
 - NEVER alter, move, or remove the footer, the mailing address, or the unsubscribe link/merge fields. They are legally required and must pass through byte-for-byte.
-- Only modify the text that describes what today's session covers or any specific instructions the host mentioned.
-- If the host mentions a topic, agenda item, or preparation instructions, work them into the relevant section.
-- Do not add new HTML sections or restructure the layout.
-- Do not invent content the host didn't mention.
+- Do not add new HTML sections or restructure the layout. Do not invent content the host didn't mention.
+- Leave all merge fields (e.g. {{ subscriber.first_name }}, {{ address }}) exactly as written.
 - Return ONLY the complete updated HTML. No commentary. No markdown fences. No explanation before or after.`;
 
   // Cloudflare Workers AI runs on this same account — no external API key, no

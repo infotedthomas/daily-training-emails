@@ -38,6 +38,9 @@ crons = ["0 15 * * 1,2,4,5", "15,35,55 16,17 * * 1,2,4,5"]
 # Must match the Phase 1 cron above (used for phase detection).
 PHASE1_CRON = "0 15 * * 1,2,4,5"
 
+# Public Worker URL, used to build the email preview link posted in Slack.
+WORKER_URL = "https://training-reminders.web-0b3.workers.dev"
+
 # Workers AI model used to merge host changes into the email (overridable).
 AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
