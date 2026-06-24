@@ -66,6 +66,7 @@ Invite the bot to the channel.
 - **Kit API key**: Kit > Settings > Developer > Create V4 key
 - **Kit template ID**: `curl -H "X-Kit-Api-Key: KEY" https://api.kit.com/v4/email_templates`
 - **Kit tag/segment IDs**: Kit > Subscribers > Tags (or Segments) > click the relevant one > ID in URL
+- **Gemini API key**: Google AI Studio (https://aistudio.google.com/apikey) > Create API key (free tier)
 
 ### 4. Configure wrangler.toml
 
@@ -83,7 +84,7 @@ Paste the printed ID into wrangler.toml.
 
 ```bash
 wrangler secret put SLACK_BOT_TOKEN
-wrangler secret put ANTHROPIC_API_KEY
+wrangler secret put GEMINI_API_KEY
 wrangler secret put KIT_API_KEY
 wrangler secret put ADMIN_TOKEN   # any long random string; guards the HTTP endpoints
 ```

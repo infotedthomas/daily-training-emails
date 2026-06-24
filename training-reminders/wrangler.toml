@@ -7,7 +7,7 @@ compatibility_date = "2024-01-01"
 # Then paste the ID below.
 [[kv_namespaces]]
 binding = "KV"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "0c751d2759924901af91367754c320a8"
 
 # Cron triggers (UTC times). The first cron is Phase 1 (draft); every other
 # cron is an approval sweep (Phase 2). Times are EDT (UTC-4); in EST they shift
@@ -25,13 +25,16 @@ crons = ["0 15 * * 1,2,4,5", "15,35,55 16,17 * * 1,2,4,5"]
 
 # Secrets (set via: wrangler secret put <NAME>)
 #   SLACK_BOT_TOKEN    - xoxb-... Slack bot token
-#   ANTHROPIC_API_KEY  - sk-ant-... Anthropic key
+#   GEMINI_API_KEY     - Google AI Studio API key (free tier)
 #   KIT_API_KEY        - Kit V4 API key
 #   ADMIN_TOKEN        - shared secret guarding all non-health HTTP endpoints
 
 [vars]
 # Must match the Phase 1 cron above (used for phase detection).
 PHASE1_CRON = "0 15 * * 1,2,4,5"
+
+# Gemini model used to merge host changes into the email (overridable).
+GEMINI_MODEL = "gemini-2.0-flash"
 
 # Slack channel where hosts post updates AND where previews/confirmations go
 SLACK_CHANNEL_ID = "C0XXXXXXXXX"
