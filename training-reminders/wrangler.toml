@@ -60,9 +60,9 @@ JEFF_SLACK_ID  = "U09BH71A2RX"
 KIT_EMAIL_TEMPLATE_ID = "0"
 
 # Subscriber targeting (Kit tags).
-# Default for the 2 PM trainings (Mon/Tue/Thu/Fri): "Daily Zoom Meeting Training (free)"
+# Default for the 2 PM trainings (Mon/Tue/Thu/Fri): "Daily Zoom Meeting Training"
 KIT_DEFAULT_FILTER_TYPE = "tag"
-KIT_DEFAULT_FILTER_ID = "13422861"
+KIT_DEFAULT_FILTER_ID = "11620591"
 # IBGS override: "Membership - IBGS"
 KIT_THU_IBGS_FILTER_TYPE = "tag"
 KIT_THU_IBGS_FILTER_ID = "13590636"
