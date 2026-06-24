@@ -68,7 +68,7 @@ function buildSessions(env) {
       sendHour: 13, sendMinute: 0,
       sessionTime: '2:00 PM ET',
       templateKey: 'template:friday',
-      defaultSubject: 'Reminder: Training Session Today at 2 PM ET',
+      defaultSubject: 'Today at 2PM - Lance Shows You How to Narrow an Auction List',
     },
   ];
 }
