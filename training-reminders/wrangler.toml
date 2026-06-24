@@ -37,26 +37,24 @@ PHASE1_CRON = "0 15 * * 1,2,4,5"
 GEMINI_MODEL = "gemini-2.0-flash"
 
 # Slack channel where hosts post updates AND where previews/confirmations go
-SLACK_CHANNEL_ID = "C0XXXXXXXXX"
+SLACK_CHANNEL_ID = "C0BDT6ZT0RE"
 
 # Host Slack user IDs (profile > three dots > Copy member ID)
-DAVID_SLACK_ID = "U0XXXXXXXXX"
-LANCE_SLACK_ID = "U0XXXXXXXXX"
-JEFF_SLACK_ID  = "U0XXXXXXXXX"
+DAVID_SLACK_ID = "U01KUGST3NC"
+LANCE_SLACK_ID = "UKJ3TGRQX"
+JEFF_SLACK_ID  = "U09BH71A2RX"
 
-# Kit email layout template ID (shared across all broadcasts)
-# Find via: curl -H "X-Kit-Api-Key: KEY" https://api.kit.com/v4/email_templates
+# Kit email layout template ID (shared across all broadcasts).
+# 0 = omit (Kit uses the account default). Footer is baked into the content
+# templates, so a layout template isn't required. Set this only if you want a
+# specific Kit layout — and if that layout adds its own footer, remove the one
+# in the content templates to avoid duplication.
 KIT_EMAIL_TEMPLATE_ID = "0"
 
-# Per-session subscriber filters
-# You can set these per-session or use a default for all.
-# Format: KIT_{SESSION_KEY_UPPERCASE}_FILTER_TYPE and _FILTER_ID
-# Session keys: MON_TRAINING, TUE_TRAINING, THU_TRAINING, THU_IBGS, FRI_TRAINING
-#
-# Example for per-session targeting:
-#   KIT_MON_TRAINING_FILTER_TYPE = "tag"
-#   KIT_MON_TRAINING_FILTER_ID = "12345"
-#
-# Or use defaults for all:
+# Subscriber targeting (Kit tags).
+# Default for the 2 PM trainings (Mon/Tue/Thu/Fri): "Daily Zoom Meeting Training (free)"
 KIT_DEFAULT_FILTER_TYPE = "tag"
-KIT_DEFAULT_FILTER_ID = "0"
+KIT_DEFAULT_FILTER_ID = "13422861"
+# IBGS override: "Membership - IBGS"
+KIT_THU_IBGS_FILTER_TYPE = "tag"
+KIT_THU_IBGS_FILTER_ID = "13590636"
