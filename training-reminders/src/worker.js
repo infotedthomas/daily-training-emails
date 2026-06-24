@@ -506,7 +506,7 @@ function parseIntent(message) {
 }
 
 
-// --------------- AI (GEMINI) ---------------
+// --------------- AI (CLOUDFLARE WORKERS AI) ---------------
 
 async function mergeWithAI(template, updateText, session, host, env) {
   const prompt = `You are updating an HTML email reminder for a training session.
@@ -531,36 +531,18 @@ RULES:
 - Do not invent content the host didn't mention.
 - Return ONLY the complete updated HTML. No commentary. No markdown fences. No explanation before or after.`;
 
-  const model = env.GEMINI_MODEL || 'gemini-2.0-flash';
-  const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': env.GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 8192 },
-      }),
-    }
-  );
+  // Cloudflare Workers AI runs on this same account — no external API key, no
+  // separate quota/billing, free-tier allocation. Llama 3.3 70B follows the
+  // "preserve all HTML, change only the copy" instruction well. Override the
+  // model with the AI_MODEL var if needed.
+  const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  const result = await env.AI.run(model, {
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 8192,
+  });
 
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`Gemini API ${resp.status}: ${body}`);
-  }
-
-  const data = await resp.json();
-  const candidate = data.candidates?.[0];
-  // Guard against truncated / blocked output so we never build an email from
-  // incomplete HTML. (STOP is normal completion.)
-  if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-    throw new Error(`Gemini stopped early: ${candidate.finishReason}`);
-  }
-  const content = (candidate?.content?.parts || []).map(p => p.text || '').join('');
-  if (!content) throw new Error('Gemini returned empty response');
+  const content = (result.response || '').trim();
+  if (!content) throw new Error('Workers AI returned empty response');
 
   // Strip markdown fences if present
   return content.replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
