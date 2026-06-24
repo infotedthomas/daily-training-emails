@@ -123,6 +123,19 @@ curl -X PUT $WORKER_URL/template/monday \
 
 Template types: `monday`, `tuesday`, `thursday`, `ibgs`, `friday`.
 
+### 8a. Compliance Footer (address + unsubscribe)
+
+Kit v4 has no "clone broadcast" endpoint, so API-created broadcasts don't inherit a prior broadcast's footer. To guarantee every send carries the mailing address and unsubscribe link, store a footer once — the worker appends it to every broadcast's content (after any AI edit):
+
+```bash
+curl -X PUT $WORKER_URL/footer \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -H "Content-Type: text/html" \
+  --data-binary @footer.html
+```
+
+Use the exact footer HTML (with the address merge field + unsubscribe link) from one of your existing broadcasts. **Skip this step if your Kit email template (`KIT_EMAIL_TEMPLATE_ID`) already includes the footer** — otherwise it would appear twice.
+
 ---
 
 ## How Hosts Submit Updates

@@ -167,6 +167,21 @@ export default {
       return json({ templates: list.keys.map(k => k.name) });
     }
 
+    // Compliance footer (mailing address + unsubscribe), appended to every broadcast.
+    if (url.pathname === '/footer') {
+      if (request.method === 'PUT') {
+        const html = await request.text();
+        if (!html || html.length < 20) return json({ error: 'Send footer HTML as body' }, 400);
+        await env.KV.put('footer', html);
+        return json({ ok: true, bytes: html.length });
+      }
+      if (request.method === 'GET') {
+        const html = await env.KV.get('footer');
+        if (!html) return json({ error: 'No footer stored' }, 404);
+        return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+      }
+    }
+
     // List pending approvals
     if (url.pathname === '/pending' && request.method === 'GET') {
       const list = await env.KV.list({ prefix: 'pending:' });
@@ -249,6 +264,14 @@ async function processSingleSession(session, env) {
     finalContent = await mergeWithAI(template, intent.text, session, host, env);
     needsApproval = true;
   }
+
+  // Append the compliance footer (mailing address + unsubscribe) if one is
+  // stored. Kit v4 has no "clone broadcast" endpoint, so fresh broadcasts don't
+  // inherit a prior broadcast's footer — this appends it after any AI merge so
+  // the required CAN-SPAM elements are always present and never AI-altered.
+  // (Skip this if your Kit email template already includes the footer.)
+  const footer = await env.KV.get('footer');
+  if (footer) finalContent = `${finalContent}\n${footer}`;
 
   // 6. Create broadcast in Kit
   const sendAt = getSendAtISO(session.sendHour, session.sendMinute);
