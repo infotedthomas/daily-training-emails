@@ -177,16 +177,16 @@
     <!-- HEADER -->
     <div class="header">
       <h1>Today's Live Session</h1>
-      <p>California Tax Sales with David</p>
+      <p>Virginia Tax Sales with David</p>
     </div>
 
     <!-- INTRO / CONTENT ABOVE BLUE LINE -->
     <div class="intro">
       <p>Hi {{ subscriber.first_name }},</p>
-      <p>Join David today for a live breakdown of California's tax sale rules and what you need to know before bidding in the Golden State.</p>
-      <p>This one goes out to fellow student <strong>Dawne Crawford</strong>, who requested the California deep dive.</p>
+      <p>Join David today for a live breakdown of Virginia's tax sale rules and what you need to know before bidding in the Old Dominion State.</p>
+      <p>This one goes out to fellow student <strong>Thomas Ball</strong>, who requested the Virginia deep dive.</p>
       <p>David will walk through what you need to know <em>before</em> bidding, including whether counties follow different rules, if auctions are live or online, deposit requirements and payment methods, bidding procedures, redemption periods and penalties, what happens to mortgages and liens after tax sales, and what state statutes say.</p>
-      <p>Thinking about bidding in California? This session will help you understand the process so you can approach auctions with confidence and avoid costly mistakes.</p>
+      <p>If you're considering Virginia, this session will help you understand the process so you can approach auctions with confidence and avoid costly mistakes.</p>
     </div>
 
     <!-- CTA SECTION BELOW BLUE LINE -->
@@ -201,12 +201,12 @@
     <!-- WEEKLY SCHEDULE -->
     <div class="weekly-schedule">
       <p class="schedule-header">This Week's Sessions</p>
-      <p><strong>Monday 2:00 PM</strong> - State Tax Sales: California with David <strong>← Today</strong></p>
-      <p><strong>Tuesday 2:00 PM</strong> - County Deep Dive: San Bernardino County, CA with David</p>
+      <p><strong>Monday 2:00 PM</strong> - State Tax Sales: Virginia with David <strong>← Today</strong></p>
+      <p><strong>Tuesday 2:00 PM</strong> - County Deep Dive: Virginia with David</p>
       <p><strong>Wednesday 9:00 PM</strong> - Weekly Q&A with a Certified Coach</p>
       <p><strong>Thursday 2:00 PM</strong> - Online Auction Tools with Coach Jeff Austin</p>
       <p><strong>Thursday 3:00 PM</strong> - Intensive Business Growth System (IBGS)*</p>
-      <p><strong>Friday 2:00 PM</strong> - Secret Session with David</p>
+      <p><strong>Friday 2:00 PM</strong> - Live Research Strategies with Lance</p>
       <p style="margin-top: 10px; font-size: 12px; color: #999;">*Available to registered members only</p>
     </div>
 
