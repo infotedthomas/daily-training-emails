@@ -180,7 +180,7 @@ export default {
 
     // Health check is the only unauthenticated route.
     if (url.pathname === '/' && request.method === 'GET') {
-      return json({ status: 'ok', service: 'training-reminders', version: '2.2' });
+      return json({ status: 'ok', service: 'training-reminders', version: '2.3', paused: !!(await env.KV.get('paused')) });
     }
 
     // Email preview — rendered HTML of a broadcast, openable from a browser link.
