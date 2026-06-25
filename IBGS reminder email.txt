@@ -95,37 +95,16 @@
           <div class="header-simple">
             <h1 style="color: #ffffff;">Ted Thomas</h1>
             <h2 style="color: #ffffff;">Intensive Business Growth System (IBGS)</h2>
-            <p style="color: #ffffff;">Lesson 3 - Interactive Session</p>
+            <p style="color: #ffffff;"><!--IBGS_HEADER_LINE--></p>
             <p style="margin-top: 10px; font-weight: 600; color: #ffffff;">
               Starting in 1 Hour - 3:00 PM Eastern
             </p>
           </div>
           <!-- BODY -->
           <div class="content">
-            <p>Hi {{ subscriber.first_name }},</p>
-            <p>This is a reminder that we are live today at <strong>3:00 PM Eastern for Intensive Business Growth System — Lesson 3</strong>.</p>
-            <p>
-              <a href="{{ subscriber.ibgs_link }}" target="_blank" rel="noopener">Join the live webinar here</a>
-            </p>
-            <p>
-              In today's lesson, Ted will continue building on the foundation from the first two classes and introduce additional concepts that will help you better understand how to identify opportunities and move forward with confidence.
-            </p>
-            <p>
-              Each lesson builds on the previous one, so be sure to attend live, take notes, and participate in the discussion.
-            </p>
-            <p>
-              <strong>Ted requests that all students be on webcam during class.</strong> This is an interactive training, and participation is important.
-            </p>
-            <p>
-              Please come prepared with your questions and be ready to engage.
-            </p>
-            <p>
-              We look forward to seeing you in class.
-            </p>
-            <p>
-              Ted Thomas Team
-            </p>
+<!--IBGS_BODY-->
           </div>
+        </div>
       </td>
     </tr>
   </table>

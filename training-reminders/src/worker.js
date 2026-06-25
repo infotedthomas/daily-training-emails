@@ -224,6 +224,26 @@ export default {
       await env.KV.delete('paused');
       return json({ ok: true, paused: false });
     }
+
+    // Test IBGS generation from raw update text (creates a draft, never sends).
+    if (url.pathname === '/ibgs-test' && request.method === 'POST') {
+      const body = await request.json().catch(() => null);
+      if (!body || !body.update) return json({ error: 'POST {"update":"IBGS email: ..."}' }, 400);
+      const parsed = parseIBGSUpdate(body.update);
+      if (!parsed.body) return json({ error: 'No body parsed from update' }, 400);
+      const { content, gen } = await buildIBGS(parsed, env);
+      const b = await createKitBroadcast({
+        subject: gen.subject, content,
+        filterType: env.KIT_THU_IBGS_FILTER_TYPE || 'tag',
+        filterId: parseInt(env.KIT_THU_IBGS_FILTER_ID || env.KIT_DEFAULT_FILTER_ID || '0'),
+      }, env);
+      return json({
+        headerLine: gen.headerLine, subject: gen.subject,
+        execSummary: ibgsExecStatus(parsed),
+        broadcastId: b.id,
+        preview: env.WORKER_URL ? `${env.WORKER_URL}/preview?broadcast=${b.id}&token=${env.PREVIEW_TOKEN || ''}` : null,
+      });
+    }
     if (url.pathname === '/trigger' && request.method === 'POST') {
       const key = url.searchParams.get('session');
       const sessions = buildSessions(env);
@@ -372,6 +392,10 @@ async function runDraftPhase(env) {
 
 async function processSingleSession(session, env, dryRun = false) {
   const host = getHost(session.host, env);
+
+  // IBGS is fully host-authored (Lance posts the whole body via an
+  // "IBGS email:" message); it has its own generation path.
+  if (session.key === 'thu-ibgs') return processIBGS(session, env, dryRun);
 
   // 1. Read Slack for relevant messages
   const message = await findRelevantMessage(session, host, env);
@@ -734,6 +758,155 @@ RULES:
 
   // Strip markdown fences if present
   return content.replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
+}
+
+
+// --------------- IBGS (host-authored, AI-formatted) ---------------
+
+// Find the most recent "IBGS email:" message in the channel (scans ~6 days, so
+// Lance can post it any day before the Thursday session).
+async function findIBGSUpdate(env) {
+  const oldest = Math.floor(Date.now() / 1000) - 6 * 86400;
+  const params = new URLSearchParams({ channel: env.SLACK_CHANNEL_ID, oldest: String(oldest), limit: '100' });
+  const resp = await fetch(`https://slack.com/api/conversations.history?${params}`, {
+    headers: { Authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
+  });
+  const data = await resp.json();
+  if (!data.ok) { console.error('IBGS history error:', data.error); return null; }
+  const msgs = (data.messages || []).filter(m => !m.bot_id && !m.subtype && /ibgs\s*email\s*:/i.test(m.text || ''));
+  return msgs.length ? msgs[0].text : null; // history is newest-first
+}
+
+// Split an "IBGS email:" message into { body, execUrl, excludeExec }.
+function parseIBGSUpdate(text) {
+  let t = String(text || '').replace(/^[\s\S]*?ibgs\s*email\s*:\s*/i, '');
+  const lines = t.split('\n');
+  let execUrl = null, excludeExec = false, idx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/executive summary/i.test(lines[i])) { idx = i; break; }
+  }
+  if (idx >= 0) {
+    const line = lines[idx];
+    if (/no\s+executive summary/i.test(line)) excludeExec = true;
+    else { const m = line.match(/https?:\/\/\S+/); if (m) execUrl = m[0]; }
+    lines.splice(idx, 1);
+  }
+  return { body: lines.join('\n').trim(), execUrl, excludeExec };
+}
+
+// Generate { headerLine, subject, bodyHtml } from Lance's body + exec decision.
+async function generateIBGS({ body, execUrl, excludeExec }, env) {
+  const includeExec = !!execUrl && !excludeExec;
+  const execRule = includeExec
+    ? `Immediately AFTER the join-webinar paragraph, add EXACTLY this paragraph:\n<p><a href="${execUrl}" target="_blank" rel="noopener">Download the executive summary</a></p>`
+    : `Do NOT include any executive-summary link anywhere.`;
+
+  const prompt = `You format a Ted Thomas "IBGS" class-reminder email from the host's body text. Do not invent or rewrite the host's content — only format it.
+
+HOST BODY:
+${body}
+
+Produce BODY_HTML following these rules in order:
+- Start with exactly: <p>Hi {{ subscriber.first_name }},</p>
+- Then the host's opening reminder paragraph (the one about being live today at 3:00 PM).
+- Then EXACTLY: <p><a href="{{ subscriber.ibgs_link }}" target="_blank" rel="noopener">Join the live webinar here</a></p>
+- ${execRule}
+- Then the REST of the host's paragraphs in order, each wrapped in <p>...</p>, using the host's exact wording.
+- Replace any opening greeting like "Hi Everyone" with the personalized greeting above (do not duplicate it). Keep any closing like "Ted Thomas Team".
+- Output only <p> elements — no markdown, no commentary.
+
+Also produce:
+- HEADER_LINE: a short line naming today's lesson/cycle (e.g. "Lesson 3 - Interactive Session" or "Brand New 13-Week Cycle - Lesson 1"), inferred from the body. Max ~8 words.
+- SUBJECT: a compelling subject line for this IBGS reminder, based on the body. Max ~12 words.
+
+Respond EXACTLY in this format and nothing else:
+HEADER_LINE: <line>
+SUBJECT: <line>
+BODY_HTML:
+<html>`;
+
+  const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  const result = await env.AI.run(model, { messages: [{ role: 'user', content: prompt }], max_tokens: 2048 });
+  const out = (result.response || '').trim();
+
+  const headerLine = (out.match(/HEADER_LINE:\s*(.+)/i) || [])[1]?.trim() || 'Interactive Session';
+  const subject = (out.match(/SUBJECT:\s*(.+)/i) || [])[1]?.trim() || 'IBGS Class Starts in 1 Hour - 3:00 PM Eastern';
+  let bodyHtml = (out.split(/BODY_HTML:\s*/i)[1] || '').trim()
+    .replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
+  if (!bodyHtml) throw new Error('IBGS body generation returned empty');
+  return { headerLine, subject, bodyHtml };
+}
+
+// Build the IBGS broadcast content from a parsed update; returns { content, gen, parsed }.
+async function buildIBGS(parsed, env) {
+  const gen = await generateIBGS(parsed, env);
+  const template = await env.KV.get('template:ibgs');
+  if (!template) throw new Error('No template:ibgs in KV. Upload it first.');
+  const content = template
+    .replace('<!--IBGS_HEADER_LINE-->', gen.headerLine)
+    .replace('<!--IBGS_BODY-->', gen.bodyHtml);
+  return { content, gen };
+}
+
+function ibgsExecStatus(parsed) {
+  if (parsed.excludeExec) return 'excluded (Lance said no)';
+  return parsed.execUrl ? `included — ${parsed.execUrl}` : 'none provided';
+}
+
+async function processIBGS(session, env, dryRun = false) {
+  const updateText = await findIBGSUpdate(env);
+  if (!updateText) {
+    await postToSlack(env, `:warning: *${session.label}* — No IBGS update found. Lance needs to post a message starting with "IBGS email:". Nothing was created.`);
+    return { session: session.key, action: 'no_update' };
+  }
+  const parsed = parseIBGSUpdate(updateText);
+  if (!parsed.body) {
+    await postToSlack(env, `:warning: *${session.label}* — Found "IBGS email:" but no body content. Nothing was created.`);
+    return { session: session.key, action: 'no_body' };
+  }
+
+  const { content, gen } = await buildIBGS(parsed, env);
+
+  const kitFilterType = env.KIT_THU_IBGS_FILTER_TYPE || env.KIT_DEFAULT_FILTER_TYPE || 'tag';
+  const kitFilterId = parseInt(env.KIT_THU_IBGS_FILTER_ID || env.KIT_DEFAULT_FILTER_ID || '0');
+  const kitTemplateId = parseInt(env.KIT_EMAIL_TEMPLATE_ID || '0');
+  const broadcastPayload = {
+    subject: gen.subject, content,
+    filterType: kitFilterType, filterId: kitFilterId,
+    emailTemplateId: kitTemplateId > 0 ? kitTemplateId : undefined,
+  };
+  const sendAt = getSendAtISO(session.sendHour, session.sendMinute);
+  const previewLink = (id) => env.WORKER_URL ? `${env.WORKER_URL}/preview?broadcast=${id}&token=${env.PREVIEW_TOKEN || ''}` : null;
+
+  if (dryRun) {
+    const b = await createKitBroadcast(broadcastPayload, env);
+    await postToSlack(env, [
+      `:test_tube: *${session.label}* — DRY RUN draft (will NOT send).`,
+      `Subject: ${gen.subject}`,
+      `Header: ${gen.headerLine}`,
+      `Exec summary: ${ibgsExecStatus(parsed)}`,
+      previewLink(b.id) ? `:eyes: *Preview:* ${previewLink(b.id)}` : null,
+    ].filter(Boolean).join('\n'));
+    return { session: session.key, action: 'dry_run', broadcastId: b.id };
+  }
+
+  // IBGS is always AI-generated, so it always goes through human approval.
+  const broadcast = await createKitBroadcast(broadcastPayload, env);
+  const previewMsg = await postToSlack(env, [
+    `:memo: *${session.label}* — IBGS draft ready (auto-written from Lance's update).`,
+    `Subject: ${gen.subject}`,
+    `Header: ${gen.headerLine}`,
+    `Exec summary: ${ibgsExecStatus(parsed)}`,
+    previewLink(broadcast.id) ? `:eyes: *Preview the email:* ${previewLink(broadcast.id)}` : null,
+    ``,
+    `Reply *go ahead* to schedule for ${formatTime(session.sendHour, session.sendMinute)} ET.`,
+    `Reply *cancel* to discard.`,
+  ].filter(Boolean).join('\n'));
+  await env.KV.put(`pending:${session.key}:${getTodayDateET()}`, JSON.stringify({
+    broadcastId: broadcast.id, messageTs: previewMsg.ts,
+    sessionKey: session.key, sessionLabel: session.label, sendAt,
+  }), { expirationTtl: 86400 });
+  return { session: session.key, action: 'pending_approval', broadcastId: broadcast.id };
 }
 
 
