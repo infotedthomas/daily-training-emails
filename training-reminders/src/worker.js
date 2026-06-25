@@ -621,7 +621,6 @@ async function processSingleSession(session, env, dryRun = false) {
     await postToSlack(env, [
       `:test_tube: *${session.label}* — DRY RUN draft created (will NOT send).`,
       `Subject: ${subject}`,
-      previewUrl ? `:eyes: *Preview the email:* ${previewUrl}` : null,
     ].filter(Boolean).join('\n'));
     return { session: session.key, action: 'dry_run', broadcastId: broadcast.id };
   }
@@ -651,7 +650,6 @@ async function processSingleSession(session, env, dryRun = false) {
     changed ? `Changes: "${truncate(intent.text, 150)}"` : null,
     proposedScheduleTopic ? `:calendar: Schedule line → "${proposedScheduleTopic}"` : null,
     `Sends at ${formatTime(session.sendHour, session.sendMinute)} ET.`,
-    previewUrl ? `:eyes: *Preview:* ${previewUrl}` : null,
     `Reply *cancel* to stop it, or post a correction to change it.`,
   ].filter(Boolean).join('\n'));
 
@@ -766,14 +764,15 @@ async function findRelevantMessage(session, host, env) {
   const fromHost = messages.find(m => m.user === host.slackId);
   if (fromHost) return fromHost.text;
 
-  // Priority 2: The coordinator posting on the host's behalf — must clearly name
-  // the host (e.g. "Jeff Austin: ...", "David: ...").
+  // Priority 2: A message naming the host or the session's day — e.g. "Jeff
+  // Austin: ...", "David: ...", or "...my Friday email" — from anyone.
   const ref = hostRefRegex(session.host);
-  const adminId = env.ADMIN_SLACK_ID;
-  if (adminId && ref) {
-    const onBehalf = messages.find(m => m.user === adminId && ref.test(m.text || ''));
-    if (onBehalf) return onBehalf.text;
-  }
+  const dayRe = new RegExp(`\\b${getDayName(session.dayOfWeek)}\\b`, 'i');
+  const named = messages.find(m => {
+    const txt = m.text || '';
+    return (ref && ref.test(txt)) || dayRe.test(txt);
+  });
+  if (named) return named.text;
 
   // Priority 3: No message found
   return null;
@@ -851,11 +850,17 @@ function getNextSendAtISO(session) {
 // poster's identity, or the coordinator naming a host.
 function routeMessageToSessions(text, userId, env) {
   const t = text || '';
-  if (/ibgs\s*email\s*:/i.test(t)) return ['thu-ibgs'];
-  const isAdmin = userId && userId === env.ADMIN_SLACK_ID;
-  if (userId === env.DAVID_SLACK_ID || (isAdmin && /\bdavid\b/i.test(t))) return ['mon-training', 'tue-training'];
-  if (userId === env.JEFF_SLACK_ID  || (isAdmin && /\bjeff\s+(austin|a)\b/i.test(t))) return ['thu-training'];
-  if (userId === env.LANCE_SLACK_ID || (isAdmin && /\blance\b/i.test(t))) return ['fri-training'];
+  // IBGS first (marker or mention) — disambiguates Lance's two sessions.
+  if (/ibgs\s*email\s*:/i.test(t) || /\bibgs\b/i.test(t)) return ['thu-ibgs'];
+  // By the DAY or host named in the message — works no matter who posts it, so
+  // "my Friday email" routes by "Friday".
+  if (/\bmonday\b/i.test(t) || /\btuesday\b/i.test(t) || /\bdavid\b/i.test(t)) return ['mon-training', 'tue-training'];
+  if (/\bfriday\b/i.test(t) || /\blance\b/i.test(t)) return ['fri-training'];
+  if (/\bthursday\b/i.test(t) || /\bjeff\s+(austin|a)\b/i.test(t)) return ['thu-training'];
+  // Otherwise route by who posted (a host's own update that names no day).
+  if (userId === env.DAVID_SLACK_ID) return ['mon-training', 'tue-training'];
+  if (userId === env.LANCE_SLACK_ID) return ['fri-training'];
+  if (userId === env.JEFF_SLACK_ID)  return ['thu-training'];
   return [];
 }
 
@@ -936,7 +941,6 @@ async function realtimeProcess(session, updateText, env, paused) {
       ? `:zap: *${session.label}* — updated in real time (draft only; system paused, not scheduled).`
       : `:zap: *${session.label}* — updated in real time. Scheduled for ${sendAt}.`,
     `Subject: ${subject}`,
-    previewUrl ? `:eyes: *Preview:* ${previewUrl}` : null,
     `Post again to change it — I always use your latest message.`,
   ].filter(Boolean).join('\n'));
 }
@@ -1232,7 +1236,6 @@ async function processDavid(session, env, dryRun = false) {
     await postToSlack(env, [
       `:test_tube: *${session.label}* — DRY RUN draft (will NOT send).`,
       `Subject: ${g.subject}`, summary,
-      previewLink(b.id) ? `:eyes: *Preview:* ${previewLink(b.id)}` : null,
     ].filter(Boolean).join('\n'));
     return { session: session.key, action: 'dry_run', broadcastId: b.id };
   }
@@ -1245,7 +1248,6 @@ async function processDavid(session, env, dryRun = false) {
       : `:white_check_mark: *${session.label}* — Scheduled. ${summary}`,
     `Subject: ${g.subject}`,
     `Sends at ${formatTime(session.sendHour, session.sendMinute)} ET.`,
-    previewLink(broadcast.id) ? `:eyes: *Preview:* ${previewLink(broadcast.id)}` : null,
     `Reply *cancel* to stop it, or post a correction to change it.`,
   ].filter(Boolean).join('\n'));
   return { session: session.key, action: usedDefault ? 'scheduled_generic' : 'scheduled_with_update', broadcastId: broadcast.id };
@@ -1376,7 +1378,6 @@ async function processIBGS(session, env, dryRun = false) {
       `Subject: ${gen.subject}`,
       `Header: ${gen.headerLine}`,
       `Exec summary: ${ibgsExecStatus(parsed)}`,
-      previewLink(b.id) ? `:eyes: *Preview:* ${previewLink(b.id)}` : null,
     ].filter(Boolean).join('\n'));
     return { session: session.key, action: 'dry_run', broadcastId: b.id };
   }
@@ -1390,7 +1391,6 @@ async function processIBGS(session, env, dryRun = false) {
     `Header: ${gen.headerLine}`,
     `Exec summary: ${ibgsExecStatus(parsed)}`,
     `Sends at ${formatTime(session.sendHour, session.sendMinute)} ET.`,
-    previewLink(broadcast.id) ? `:eyes: *Preview:* ${previewLink(broadcast.id)}` : null,
     `Reply *cancel* to stop it, or post a correction to change it.`,
   ].filter(Boolean).join('\n'));
   return { session: session.key, action: 'scheduled', broadcastId: broadcast.id };
