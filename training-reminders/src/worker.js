@@ -1041,6 +1041,12 @@ function extractSubjectAndBody(text) {
 
 // --------------- AI (CLOUDFLARE WORKERS AI) ---------------
 
+// Convert Slack bold (*text*) into HTML <strong> so bolding in Slack shows as
+// bold in Kit. Boundary checks avoid touching underscores/merge fields and math.
+function slackBoldToHtml(text) {
+  return String(text || '').replace(/(^|[^*\w])\*([^*\n]+?)\*(?![*\w])/g, '$1<strong>$2</strong>');
+}
+
 async function mergeWithAI(template, updateText, session, host, env) {
   const prompt = `You are updating an HTML email reminder for a training session.
 
@@ -1076,8 +1082,8 @@ RULES:
   const content = (result.response || '').trim();
   if (!content) throw new Error('Workers AI returned empty response');
 
-  // Strip markdown fences if present
-  return content.replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
+  // Strip markdown fences if present; convert any Slack *bold* to <strong>.
+  return slackBoldToHtml(content.replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim());
 }
 
 
@@ -1097,7 +1103,7 @@ Host's copy:
 ${updateText}`;
   const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
   const r = await env.AI.run(model, { messages: [{ role: 'user', content: prompt }], max_tokens: 1400 });
-  return (r.response || '').trim().replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
+  return slackBoldToHtml((r.response || '').trim().replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim());
 }
 
 // Replace the inner content of the template's <div class="intro"> with new HTML.
@@ -1348,7 +1354,7 @@ BODY_HTML:
   let bodyHtml = (out.split(/BODY_HTML:\s*/i)[1] || '').trim()
     .replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
   if (!bodyHtml) throw new Error('IBGS body generation returned empty');
-  return { headerLine, subject, bodyHtml };
+  return { headerLine, subject, bodyHtml: slackBoldToHtml(bodyHtml) };
 }
 
 // Build the IBGS broadcast content from a parsed update; returns { content, gen, parsed }.
