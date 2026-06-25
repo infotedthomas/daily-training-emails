@@ -131,13 +131,4 @@
   </table>
 </center>
 
-<div style="text-align: center; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 12px; color: #999; padding: 20px;">
-  <p style="margin: 0 0 4px 0;">{{ address }}</p>
-  <p style="margin: 0;">
-    <a href="{{ unsubscribe_url }}" style="color: #999; text-decoration: underline;">Unsubscribe</a>
-    &middot;
-    <a href="{{ subscriber_preferences_url }}" style="color: #999; text-decoration: underline;">Preferences</a>
-  </p>
-</div>
-
 {{ message_content }}
