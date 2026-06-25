@@ -196,12 +196,31 @@ export default {
     console.log('Cron complete:', JSON.stringify(results));
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     // Health check is the only unauthenticated route.
     if (url.pathname === '/' && request.method === 'GET') {
-      return json({ status: 'ok', service: 'training-reminders', version: '2.3', paused: !!(await env.KV.get('paused')) });
+      return json({ status: 'ok', service: 'training-reminders', version: '2.4', paused: !!(await env.KV.get('paused')) });
+    }
+
+    // Slack Events webhook (real-time). Authenticated by Slack's signature, not
+    // the admin token, so it sits before the auth gate.
+    if (url.pathname === '/slack/events' && request.method === 'POST') {
+      const raw = await request.text();
+      let body;
+      try { body = JSON.parse(raw); } catch { return new Response('bad', { status: 400 }); }
+      // One-time URL verification handshake when you set the Request URL in Slack.
+      if (body.type === 'url_verification') {
+        return new Response(body.challenge, { headers: { 'Content-Type': 'text/plain' } });
+      }
+      if (!(await verifySlackSignature(request, raw, env))) {
+        return new Response('bad signature', { status: 401 });
+      }
+      // Acknowledge immediately (Slack requires <3s); process in the background.
+      if (ctx && ctx.waitUntil) ctx.waitUntil(handleSlackEvent(body, env));
+      else await handleSlackEvent(body, env);
+      return new Response('ok');
     }
 
     // Email preview — rendered HTML of a broadcast, openable from a browser link.
@@ -770,6 +789,44 @@ async function postToSlack(env, text) {
   const data = await resp.json();
   if (!data.ok) console.error('Slack post error:', data.error);
   return data;
+}
+
+
+// --------------- SLACK EVENTS (real-time) ---------------
+
+// Verify a request really came from Slack (HMAC-SHA256 over v0:ts:body).
+async function verifySlackSignature(request, rawBody, env) {
+  const ts = request.headers.get('X-Slack-Request-Timestamp');
+  const sig = request.headers.get('X-Slack-Signature');
+  const secret = env.SLACK_SIGNING_SECRET;
+  if (!ts || !sig || !secret) return false;
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false; // replay guard
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`v0:${ts}:${rawBody}`));
+  const hex = 'v0=' + [...new Uint8Array(mac)].map(b => b.toString(16).padStart(2, '0')).join('');
+  // constant-time-ish compare
+  if (hex.length !== sig.length) return false;
+  let diff = 0;
+  for (let i = 0; i < hex.length; i++) diff |= hex.charCodeAt(i) ^ sig.charCodeAt(i);
+  return diff === 0;
+}
+
+// Handle a Slack event. (Phase 1: verify + log. Real-time routing/processing
+// with latest-wins is built next, once the subscription is connected.)
+async function handleSlackEvent(body, env) {
+  // Dedup Slack's retried deliveries.
+  if (body.event_id) {
+    const seen = `evt:${body.event_id}`;
+    if (await env.KV.get(seen)) return;
+    await env.KV.put(seen, '1', { expirationTtl: 3600 });
+  }
+  const ev = body.event || {};
+  const text = ev.subtype === 'message_changed' ? (ev.message && ev.message.text) : ev.text;
+  if (!text || ev.bot_id) return;
+  console.log('Slack event:', JSON.stringify({ subtype: ev.subtype || 'message', user: ev.user || (ev.message && ev.message.user), text: String(text).slice(0, 120) }));
 }
 
 
