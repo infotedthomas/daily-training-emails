@@ -239,6 +239,13 @@ export default {
       return json({ ok: true, paused: false });
     }
 
+    // Test David's Mon/Tue generation from his shorthand (returns copy only).
+    if (url.pathname === '/david-test' && request.method === 'POST') {
+      const body = await request.json().catch(() => null);
+      if (!body || !body.update || !body.day) return json({ error: 'POST {"update":"...","day":"monday|tuesday"}' }, 400);
+      return json(await generateDavidContent(body.update, body.day, env));
+    }
+
     // Test IBGS generation from raw update text (creates a draft, never sends).
     if (url.pathname === '/ibgs-test' && request.method === 'POST') {
       const body = await request.json().catch(() => null);
@@ -793,6 +800,41 @@ RULES:
 
   // Strip markdown fences if present
   return content.replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
+}
+
+
+// --------------- DAVID (Mon/Tue state & county, from his shorthand) ---------------
+
+// From David's terse note, generate this week's email pieces for the given day.
+// Tuesday stays general when no counties are named; references the requesting
+// student if David mentioned one.
+async function generateDavidContent(update, dayKind, env) {
+  const isTue = dayKind === 'tuesday';
+  const prompt = `David runs a daily tax-defaulted-property investing training. From his short note, write the copy for this week's ${isTue ? 'Tuesday COUNTY deep-dive' : 'Monday STATE overview'} reminder email.
+
+David's note: "${update}"
+
+Guidance:
+- ${isTue
+    ? 'This is a county-level deep dive within the state. If David named specific counties, feature them by name. If he did NOT name counties, keep it general (e.g. "selected counties in <state>") and do NOT invent county names.'
+    : "This is a state-level overview of that state's tax sale rules and what to know before bidding."}
+- If David named a student who requested the topic, reference them warmly once, e.g. "This one goes out to fellow student <Name>, who requested the <state> deep dive."
+- Warm, practical, concise — no hype. Use the subscriber's first name only via the literal token {{ subscriber.first_name }} in the greeting.
+
+Respond EXACTLY in this format and nothing else:
+SUBJECT: <subject line>
+SUBTITLE: <short header subtitle, e.g. "Virginia Tax Sales with David">
+INTRO:
+<2 to 4 short HTML <p> paragraphs, starting with <p>Hi {{ subscriber.first_name }},</p>>`;
+
+  const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  const r = await env.AI.run(model, { messages: [{ role: 'user', content: prompt }], max_tokens: 900 });
+  const out = (r.response || '').trim();
+  const subject = (out.match(/SUBJECT:\s*(.+)/i) || [])[1]?.trim() || '';
+  const subtitle = (out.match(/SUBTITLE:\s*(.+)/i) || [])[1]?.trim() || '';
+  const intro = (out.split(/INTRO:\s*/i)[1] || '').trim()
+    .replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
+  return { subject, subtitle, intro };
 }
 
 
