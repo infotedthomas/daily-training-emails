@@ -14,19 +14,20 @@ id = "0c751d2759924901af91367754c320a8"
 [ai]
 binding = "AI"
 
-# Cron triggers (UTC times). The first cron is Phase 1 (draft); every other
-# cron is an approval sweep (Phase 2). Times are EDT (UTC-4); in EST they shift
-# one hour earlier, but actual send times are computed dynamically and stay correct.
-#
-# Phase 1: 15:00 UTC = 11:00 AM EDT
-#   Reads Slack, creates drafts / auto-schedules, posts previews
-#
-# Phase 2: 12:15–1:55 PM EDT, every 20 min (16:15,16:35,16:55,17:15,17:35,17:55 UTC)
-#   Repeatedly checks for "go ahead" replies so a late approval still sends.
-#   Covers the 2 PM ET training sends and the 3 PM ET IBGS send.
-#
+# Cron triggers. The worker dispatches by the CURRENT Eastern time (see nowET in
+# scheduled()), so each slot is listed at BOTH its EDT (UTC-4) and EST (UTC-5)
+# UTC times; only the intended ET moment acts. ET slots:
+#   12:00 PM ET — training reminders   (16:00 EDT / 17:00 EST)
+#   12:40 PM ET — schedule training    (16:40 EDT / 17:40 EST)
+#    1:30 PM ET — IBGS reminder (Thu)  (17:30 EDT / 18:30 EST)
+#    1:45 PM ET — schedule IBGS (Thu)  (17:45 EDT / 18:45 EST)
 [triggers]
-crons = ["0 15 * * 1,2,4,5", "15,35,55 16,17 * * 1,2,4,5"]
+crons = [
+  "0 16,17 * * 1,2,4,5",
+  "40 16,17 * * 1,2,4,5",
+  "30 17,18 * * 4",
+  "45 17,18 * * 4",
+]
 
 # Secrets (set via: wrangler secret put <NAME>)
 #   SLACK_BOT_TOKEN    - xoxb-... Slack bot token
@@ -35,9 +36,6 @@ crons = ["0 15 * * 1,2,4,5", "15,35,55 16,17 * * 1,2,4,5"]
 # (AI uses the Workers AI binding above — no API key required.)
 
 [vars]
-# Must match the Phase 1 cron above (used for phase detection).
-PHASE1_CRON = "0 15 * * 1,2,4,5"
-
 # Public Worker URL, used to build the email preview link posted in Slack.
 WORKER_URL = "https://training-reminders.web-0b3.workers.dev"
 

@@ -156,22 +156,32 @@ Output ONLY the line itself — no quotes, no trailing period, no preamble, max 
 
 export default {
   async scheduled(event, env, ctx) {
-    // Global kill-switch: while paused, no cron does anything (no drafts, no
-    // sends, no approvals). Toggle with POST /pause and POST /resume.
+    // Global kill-switch: while paused, no cron does anything.
     if (await env.KV.get('paused')) {
       console.log('Paused — skipping cron', event.cron);
       return;
     }
 
-    // The morning cron runs the draft phase; every other cron is an approval
-    // sweep. Running approval on a recurring schedule (not just once) closes the
-    // late-approval gap and avoids brittle exact-string cron matching.
-    const phase1Cron = env.PHASE1_CRON || '0 15 * * 1,2,4,5';
+    // Dispatch by the CURRENT Eastern time (not the cron string), so the same
+    // schedule works year-round through EDT/EST. Crons are set to fire at both
+    // seasons' UTC equivalents; only the intended ET slot acts.
+    const { hour, minute, dow } = nowET();
+    const trainingDay = [1, 2, 4, 5].includes(dow); // Mon, Tue, Thu, Fri
+    const at = (h, m) => hour === h && minute === m;
 
-    const results = (event.cron === phase1Cron)
-      ? await runDraftPhase(env)
-      : await runApprovalPhase(env);
-
+    let results = null;
+    if (trainingDay && at(12, 0)) {
+      results = await runReminders(env, 'training');     // 12:00 PM ET — nudge hosts
+    } else if (trainingDay && at(12, 40)) {
+      results = await runProcess(env, s => s.key !== 'thu-ibgs'); // 12:40 PM ET — schedule training
+    } else if (dow === 4 && at(13, 30)) {
+      results = await runReminders(env, 'ibgs');         // 1:30 PM ET — nudge Lance
+    } else if (dow === 4 && at(13, 45)) {
+      results = await runProcess(env, s => s.key === 'thu-ibgs'); // 1:45 PM ET — schedule IBGS
+    } else {
+      console.log(`Cron fired at ET ${hour}:${pad(minute)} dow=${dow} — no slot matched`);
+      return;
+    }
     console.log('Cron complete:', JSON.stringify(results));
   },
 
@@ -209,7 +219,11 @@ export default {
 
     // Manual triggers
     if (url.pathname === '/phase1' && request.method === 'POST') {
-      return json(await runDraftPhase(env));
+      return json(await runProcess(env, () => true));
+    }
+    // Manually fire reminders for testing: POST /remind?kind=training|ibgs
+    if (url.pathname === '/remind' && request.method === 'POST') {
+      return json(await runReminders(env, url.searchParams.get('kind') === 'ibgs' ? 'ibgs' : 'training'));
     }
     if (url.pathname === '/phase2' && request.method === 'POST') {
       return json(await runApprovalPhase(env));
@@ -359,20 +373,35 @@ export default {
 
 // --------------- PHASE 1: CREATE DRAFTS ---------------
 
-async function runDraftPhase(env) {
+// Current Eastern time, DST-aware: { hour (0-23), minute, dow (0=Sun) }.
+function nowET() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false,
+    weekday: 'short', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(new Date());
+  const val = t => (parts.find(p => p.type === t) || {}).value;
+  const dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  let hour = parseInt(val('hour'), 10);
+  if (hour === 24) hour = 0; // some platforms render midnight as 24
+  return { hour, minute: parseInt(val('minute'), 10), dow: dowMap[val('weekday')] };
+}
+
+// Process today's sessions matching `sessionFilter`: read updates, build, and
+// SCHEDULE each (optimistic — ready to go; review/correct by message).
+async function runProcess(env, sessionFilter) {
   const sessions = buildSessions(env);
   const todayDow = getTodayDayOfWeek();
-  const todaySessions = sessions.filter(s => s.dayOfWeek === todayDow);
+  const todaySessions = sessions.filter(s => s.dayOfWeek === todayDow && sessionFilter(s));
 
   if (todaySessions.length === 0) {
-    return { message: 'No sessions today', dayOfWeek: todayDow };
+    return { message: 'No matching sessions today', dayOfWeek: todayDow };
   }
 
   const dateStr = getTodayDateET();
   const results = [];
   for (const session of todaySessions) {
-    // Idempotency: skip any session already handled today so a re-run of the
-    // cron (or an overlapping manual /phase1) can't create duplicate broadcasts.
+    // Idempotency: skip any session already handled today so a re-run can't
+    // create duplicate broadcasts.
     const doneKey = `done:${session.key}:${dateStr}`;
     if (await env.KV.get(doneKey)) {
       results.push({ session: session.key, action: 'already_processed' });
@@ -384,10 +413,35 @@ async function runDraftPhase(env) {
       results.push(result);
     } catch (err) {
       results.push({ session: session.key, error: err.message });
-      await postToSlack(env, `:x: Failed to create draft for *${session.label}*.\nError: ${err.message}`);
+      await postToSlack(env, `:x: Failed to process *${session.label}*.\nError: ${err.message}`);
     }
   }
-  return { phase: 'draft', dayOfWeek: todayDow, results };
+  return { dayOfWeek: todayDow, results };
+}
+
+// Nudge hosts who haven't posted an update yet, ahead of their send time.
+async function runReminders(env, kind) {
+  if (kind === 'ibgs') {
+    const update = await findIBGSUpdate(env);
+    if (update) return { phase: 'reminder-ibgs', action: 'already_posted' };
+    const lance = getHost('lance', env);
+    await postToSlack(env, `${lance.slackId ? `<@${lance.slackId}> ` : ''}:alarm_clock: Reminder: post your IBGS update for today — start the message with *"IBGS email:"*. It sends at 2:00 PM ET.`);
+    return { phase: 'reminder-ibgs', action: 'reminded' };
+  }
+
+  // Training reminders (exclude IBGS, which has its own later reminder).
+  const sessions = buildSessions(env);
+  const todayDow = getTodayDayOfWeek();
+  const todays = sessions.filter(s => s.dayOfWeek === todayDow && s.key !== 'thu-ibgs');
+  const results = [];
+  for (const session of todays) {
+    const host = getHost(session.host, env);
+    const msg = await findRelevantMessage(session, host, env);
+    if (msg) { results.push({ session: session.key, action: 'already_posted' }); continue; }
+    await postToSlack(env, `${host.slackId ? `<@${host.slackId}> ` : ''}:alarm_clock: Reminder: post any changes for today's *${session.label}* email, or the default will be sent. Goes out at ${formatTime(session.sendHour, session.sendMinute)} ET.`);
+    results.push({ session: session.key, action: 'reminded' });
+  }
+  return { phase: 'reminder-training', results };
 }
 
 async function processSingleSession(session, env, dryRun = false) {
@@ -422,7 +476,6 @@ async function processSingleSession(session, env, dryRun = false) {
   // 5. Build content and decide on approval
   let finalContent = template;
   let subject = intent.subject || session.defaultSubject;
-  let needsApproval = false;
 
   // The schedule slot for this session; when a host posts changes we also derive
   // a proposed schedule line so the weekly schedule stays in sync.
@@ -431,7 +484,6 @@ async function processSingleSession(session, env, dryRun = false) {
 
   if (intent.type === 'changes') {
     finalContent = await mergeWithAI(template, intent.text, session, host, env);
-    needsApproval = true;
     if (scheduleSlot) proposedScheduleTopic = await scheduleTopicFromUpdate(intent.text, scheduleSlot, env);
   }
 
@@ -484,53 +536,36 @@ async function processSingleSession(session, env, dryRun = false) {
     return { session: session.key, action: 'dry_run', broadcastId: broadcast.id };
   }
 
-  if (needsApproval) {
-    // Draft only — no send_at
-    const broadcast = await createKitBroadcast(broadcastPayload, env);
+  // Optimistic: schedule it immediately (changes OR default), post a preview, and
+  // let the team cancel or correct by posting another message. No "go ahead" gate.
+  const changed = intent.type === 'changes';
 
-    const previewUrl = env.WORKER_URL
-      ? `${env.WORKER_URL}/preview?broadcast=${broadcast.id}&token=${env.PREVIEW_TOKEN || ''}`
-      : null;
-
-    const previewMsg = await postToSlack(env, [
-      `:memo: *${session.label}* — Draft ready with changes.`,
-      `Subject: ${subject}`,
-      `Changes from ${host.name}: "${truncate(intent.text, 150)}"`,
-      proposedScheduleTopic ? `:calendar: Schedule line → "${proposedScheduleTopic}"` : null,
-      previewUrl ? `:eyes: *Preview the email:* ${previewUrl}` : null,
-      ``,
-      `Reply *go ahead* to schedule for ${formatTime(session.sendHour, session.sendMinute)} ET.`,
-      `Reply *cancel* to discard.`,
-    ].filter(Boolean).join('\n'));
-
-    // Store pending approval
-    const pendingKey = `pending:${session.key}:${getTodayDateET()}`;
-    await env.KV.put(pendingKey, JSON.stringify({
-      broadcastId: broadcast.id,
-      messageTs: previewMsg.ts,
-      sessionKey: session.key,
-      sessionLabel: session.label,
-      sendAt,
-      scheduleSlot: scheduleSlot ? scheduleSlot.key : null,
-      scheduleTopic: proposedScheduleTopic || null,
-    }), { expirationTtl: 86400 }); // auto-expire after 24h
-
-    return { session: session.key, action: 'pending_approval', broadcastId: broadcast.id };
-
-  } else {
-    // Auto-schedule — no changes means no taste required
-    broadcastPayload.sendAt = sendAt;
-    const broadcast = await createKitBroadcast(broadcastPayload, env);
-
-    await postToSlack(env, [
-      `:white_check_mark: *${session.label}* — Auto-scheduled (no changes to template).`,
-      `Subject: ${subject}`,
-      `Sends at: ${formatTime(session.sendHour, session.sendMinute)} ET`,
-      message ? `Note from channel: "${truncate(message, 100)}"` : `No message from ${host.name}. Using default.`,
-    ].filter(Boolean).join('\n'));
-
-    return { session: session.key, action: 'auto_scheduled', broadcastId: broadcast.id };
+  // Persist any host-derived schedule line so every email reflects it this week.
+  if (proposedScheduleTopic && scheduleSlot) {
+    const overrides = await getScheduleOverrides(env);
+    overrides[scheduleSlot.key] = proposedScheduleTopic;
+    await env.KV.put('schedule:overrides', JSON.stringify(overrides));
   }
+
+  broadcastPayload.sendAt = sendAt;
+  const broadcast = await createKitBroadcast(broadcastPayload, env);
+  const previewUrl = env.WORKER_URL
+    ? `${env.WORKER_URL}/preview?broadcast=${broadcast.id}&token=${env.PREVIEW_TOKEN || ''}`
+    : null;
+
+  await postToSlack(env, [
+    changed
+      ? `:white_check_mark: *${session.label}* — Scheduled with ${host.name}'s changes.`
+      : `:white_check_mark: *${session.label}* — Scheduled (default — no changes).`,
+    `Subject: ${subject}`,
+    changed ? `Changes: "${truncate(intent.text, 150)}"` : null,
+    proposedScheduleTopic ? `:calendar: Schedule line → "${proposedScheduleTopic}"` : null,
+    `Sends at ${formatTime(session.sendHour, session.sendMinute)} ET.`,
+    previewUrl ? `:eyes: *Preview:* ${previewUrl}` : null,
+    `Reply *cancel* to stop it, or post a correction to change it.`,
+  ].filter(Boolean).join('\n'));
+
+  return { session: session.key, action: changed ? 'scheduled_with_changes' : 'scheduled_default', broadcastId: broadcast.id };
 }
 
 
@@ -890,23 +925,19 @@ async function processIBGS(session, env, dryRun = false) {
     return { session: session.key, action: 'dry_run', broadcastId: b.id };
   }
 
-  // IBGS is always AI-generated, so it always goes through human approval.
+  // Optimistic: schedule it; the team reviews and corrects by message.
+  broadcastPayload.sendAt = sendAt;
   const broadcast = await createKitBroadcast(broadcastPayload, env);
-  const previewMsg = await postToSlack(env, [
-    `:memo: *${session.label}* — IBGS draft ready (auto-written from Lance's update).`,
+  await postToSlack(env, [
+    `:white_check_mark: *${session.label}* — Scheduled (auto-written from Lance's update).`,
     `Subject: ${gen.subject}`,
     `Header: ${gen.headerLine}`,
     `Exec summary: ${ibgsExecStatus(parsed)}`,
-    previewLink(broadcast.id) ? `:eyes: *Preview the email:* ${previewLink(broadcast.id)}` : null,
-    ``,
-    `Reply *go ahead* to schedule for ${formatTime(session.sendHour, session.sendMinute)} ET.`,
-    `Reply *cancel* to discard.`,
+    `Sends at ${formatTime(session.sendHour, session.sendMinute)} ET.`,
+    previewLink(broadcast.id) ? `:eyes: *Preview:* ${previewLink(broadcast.id)}` : null,
+    `Reply *cancel* to stop it, or post a correction to change it.`,
   ].filter(Boolean).join('\n'));
-  await env.KV.put(`pending:${session.key}:${getTodayDateET()}`, JSON.stringify({
-    broadcastId: broadcast.id, messageTs: previewMsg.ts,
-    sessionKey: session.key, sessionLabel: session.label, sendAt,
-  }), { expirationTtl: 86400 });
-  return { session: session.key, action: 'pending_approval', broadcastId: broadcast.id };
+  return { session: session.key, action: 'scheduled', broadcastId: broadcast.id };
 }
 
 
