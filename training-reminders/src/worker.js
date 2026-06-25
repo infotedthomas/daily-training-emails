@@ -240,7 +240,8 @@ export default {
       });
       if (!r.ok) return json({ error: `Kit get broadcast ${r.status}` }, 502);
       const b = (await r.json()).broadcast;
-      return new Response(b.content || '<p>(no content)</p>', {
+      const banner = `<div style="font-family:'Segoe UI',Tahoma,sans-serif;background:#1e4578;color:#fff;padding:10px 16px;font-size:14px;font-weight:600;">Subject: ${(b.subject || '(none)').replace(/</g, '&lt;')}</div>`;
+      return new Response(banner + (b.content || '<p>(no content)</p>'), {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
     }
