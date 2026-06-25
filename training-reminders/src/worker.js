@@ -895,7 +895,13 @@ async function findDavidUpdate(env) {
   const data = await resp.json();
   if (!data.ok) return null;
   const david = getHost('david', env);
-  const msgs = (data.messages || []).filter(m => !m.bot_id && !m.subtype && m.user === david.slackId && (m.text || '').trim());
+  const adminId = env.ADMIN_SLACK_ID;
+  const msgs = (data.messages || []).filter(m => {
+    if (m.bot_id || m.subtype || !(m.text || '').trim()) return false;
+    if (m.user === david.slackId) return true;                                  // David posts directly
+    if (adminId && m.user === adminId && /\bdavid\b/i.test(m.text)) return true; // coordinator on his behalf
+    return false;
+  });
   if (!msgs.length) return null;
   return msgs.slice(0, 4).reverse().map(m => m.text).join('\n---\n'); // oldest-first context
 }

@@ -50,6 +50,9 @@ DAVID_SLACK_ID = "U01KUGST3NC"
 LANCE_SLACK_ID = "UKJ3TGRQX"
 JEFF_SLACK_ID  = "U09BH71A2RX"
 
+# Coordinator who can post updates on behalf of any host (e.g. "David: ...").
+ADMIN_SLACK_ID = "U020RQMJXS8"
+
 # Kit email layout template ID (shared across all broadcasts).
 # 0 = omit (Kit uses the account default). Footer is baked into the content
 # templates, so a layout template isn't required. Set this only if you want a
