@@ -82,6 +82,17 @@ function getHost(hostKey, env) {
   return hosts[hostKey];
 }
 
+// How the coordinator must name a host to post on his behalf. Jeff Austin needs
+// "Jeff Austin" / "Jeff A" (NOT bare "Jeff") so it can't be confused with the
+// coordinator, who is also named Jeff.
+function hostRefRegex(hostKey) {
+  return {
+    david: /\bdavid\b/i,
+    lance: /\blance\b/i,
+    jeff:  /\bjeff\s+(austin|a)\b/i,
+  }[hostKey];
+}
+
 
 // --------------- WEEKLY SCHEDULE (shared across all emails) ---------------
 //
@@ -697,22 +708,18 @@ async function findRelevantMessage(session, host, env) {
   // so the worker never mistakes its own confirmations for a host update.
   const messages = (data.messages || []).filter(m => !m.bot_id && !m.subtype && m.text);
 
-  // Priority 1: Direct message from the host
+  // Priority 1: Direct message from the host (their own Slack ID — unambiguous).
   const fromHost = messages.find(m => m.user === host.slackId);
   if (fromHost) return fromHost.text;
 
-  // Priority 2: Message from anyone mentioning the host by name or session type
-  const searchTerms = [
-    host.name.toLowerCase(),
-    session.host.toLowerCase(),
-    session.key.includes('ibgs') ? 'ibgs' : getDayName(session.dayOfWeek).toLowerCase(),
-  ];
-
-  const proxy = messages.find(m => {
-    const lower = (m.text || '').toLowerCase();
-    return searchTerms.some(term => lower.includes(term));
-  });
-  if (proxy) return proxy.text;
+  // Priority 2: The coordinator posting on the host's behalf — must clearly name
+  // the host (e.g. "Jeff Austin: ...", "David: ...").
+  const ref = hostRefRegex(session.host);
+  const adminId = env.ADMIN_SLACK_ID;
+  if (adminId && ref) {
+    const onBehalf = messages.find(m => m.user === adminId && ref.test(m.text || ''));
+    if (onBehalf) return onBehalf.text;
+  }
 
   // Priority 3: No message found
   return null;
