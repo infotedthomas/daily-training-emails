@@ -844,11 +844,12 @@ function routeMessageToSessions(text, userId, env) {
 }
 
 // Build {subject, content} for a session from a host's update (no scheduling).
-async function buildSessionEmail(session, updateText, env) {
+async function buildSessionEmail(session, rawUpdate, env) {
   const host = getHost(session.host, env);
+  const { subject: customSubject, body: updateText } = extractSubjectAndBody(rawUpdate);
   if (session.key === 'thu-ibgs') {
     const { content, gen } = await buildIBGS(parseIBGSUpdate(updateText), env);
-    return { subject: gen.subject, content };
+    return { subject: customSubject || gen.subject, content };
   }
   if (session.key === 'mon-training' || session.key === 'tue-training') {
     const g = await generateDavidContent(updateText, session.key === 'mon-training' ? 'monday' : 'tuesday', env);
@@ -861,7 +862,7 @@ async function buildSessionEmail(session, updateText, env) {
     let content = (await env.KV.get(session.templateKey))
       .replace('<!--DAVID_SUBTITLE-->', g.subtitle).replace('<!--DAVID_INTRO-->', g.intro);
     content = content.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
-    return { subject: g.subject, content };
+    return { subject: customSubject || g.subject, content };
   }
   // Jeff / Lance training.
   const template = await env.KV.get(session.templateKey);
@@ -886,7 +887,7 @@ async function buildSessionEmail(session, updateText, env) {
   if (content.includes('<!--WEEKLY_SCHEDULE-->')) {
     content = content.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
   }
-  return { subject: session.defaultSubject, content };
+  return { subject: customSubject || session.defaultSubject, content };
 }
 
 // Real-time: build the email and (re)schedule it, always replacing the prior one
@@ -983,16 +984,20 @@ function parseIntent(message) {
     return { type: 'no-change' };
   }
 
-  // Has changes — check for subject override
-  let subject = null;
-  let body = text;
-  const subjectMatch = text.match(/^SUBJECT:\s*(.+?)(?:\n|$)/im);
-  if (subjectMatch) {
-    subject = subjectMatch[1].trim();
-    body = text.replace(subjectMatch[0], '').trim();
-  }
-
+  // Has changes — pull out any host-supplied subject and clean the body.
+  const { subject, body } = extractSubjectAndBody(text);
   return { type: 'changes', text: body, subject };
+}
+
+// Pull a host-supplied subject ("Subject:" or "Subject line:") out of a message,
+// and strip the "Make changes to my ... email" framing from the body.
+function extractSubjectAndBody(text) {
+  let body = String(text || '').trim();
+  let subject = null;
+  const m = body.match(/^\s*subject(?:\s*line)?\s*:\s*(.+?)\s*$/im);
+  if (m) { subject = m[1].trim(); body = body.replace(m[0], '').trim(); }
+  body = body.replace(/^\s*make changes to my[^\n]*\n?/i, '').trim();
+  return { subject, body };
 }
 
 
