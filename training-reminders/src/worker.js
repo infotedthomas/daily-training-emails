@@ -942,9 +942,9 @@ async function realtimeProcess(session, updateText, env, paused) {
   // Mark done so the cron won't also create one for that day.
   if (!paused) await env.KV.put(`done:${session.key}:${dateStr}`, 'realtime', { expirationTtl: 4 * 86400 });
 
-  // Link only the FINALIZED (scheduled) broadcast, and via a stable per-session
-  // URL that always resolves to the current one (never a replaced/deleted draft).
-  const link = (!paused && env.WORKER_URL) ? `${env.WORKER_URL}/preview?session=${session.key}&token=${env.PREVIEW_TOKEN || ''}` : null;
+  // Stable per-session link — always resolves to the CURRENT broadcast for this
+  // session (never a replaced/deleted draft), so it's safe to post even on drafts.
+  const link = env.WORKER_URL ? `${env.WORKER_URL}/preview?session=${session.key}&token=${env.PREVIEW_TOKEN || ''}` : null;
   await postToSlack(env, [
     paused
       ? `:zap: *${session.label}* — updated in real time (draft only; system paused, not scheduled).`
