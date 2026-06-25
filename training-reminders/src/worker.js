@@ -69,7 +69,8 @@ function buildSessions(env) {
       sessionTime: '2:00 PM ET',
       templateKey: 'template:friday',
       defaultSubject: 'Today at 2PM - Lance Shows You How to Narrow an Auction List',
-      lockSubtitle: true, // Lance's subheader stays "Live Research Strategies with Lance"
+      lockSubtitle: true,     // subheader stays "Live Research Strategies with Lance"
+      hostProvidesBody: true, // Lance sends complete copy — format it faithfully, don't merge
     },
   ];
 }
@@ -276,15 +277,9 @@ export default {
       if (!body || !body.text || !body.session) return json({ error: 'POST {"text":"...","session":"thu-training"}' }, 400);
       const session = buildSessions(env).find(s => s.key === body.session);
       if (!session) return json({ error: 'unknown session' }, 400);
-      const host = getHost(session.host, env);
-      const template = await env.KV.get(session.templateKey);
-      let content = await mergeWithAI(template, body.text, session, host, env);
-      content = await applyTopicSubtitle(content, body.text, host, env);
-      if (content.includes('<!--WEEKLY_SCHEDULE-->')) {
-        content = content.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
-      }
-      const b = await createKitBroadcast({ subject: session.defaultSubject, content, filterType: 'tag', filterId: parseInt(env.KIT_DEFAULT_FILTER_ID || '0') }, env);
-      return json({ subject: session.defaultSubject, broadcastId: b.id, preview: env.WORKER_URL ? `${env.WORKER_URL}/preview?broadcast=${b.id}&token=${env.PREVIEW_TOKEN || ''}` : null });
+      const { subject, content } = await buildSessionEmail(session, body.text, env);
+      const b = await createKitBroadcast({ subject, content, filterType: 'tag', filterId: parseInt(env.KIT_DEFAULT_FILTER_ID || '0') }, env);
+      return json({ subject, broadcastId: b.id, preview: env.WORKER_URL ? `${env.WORKER_URL}/preview?broadcast=${b.id}&token=${env.PREVIEW_TOKEN || ''}` : null });
     }
 
     // Test David's Mon/Tue generation from his shorthand (assembles a draft).
@@ -556,9 +551,14 @@ async function processSingleSession(session, env, dryRun = false) {
   let proposedScheduleTopic = null;
 
   if (intent.type === 'changes') {
-    finalContent = await mergeWithAI(template, intent.text, session, host, env);
-    if (!session.lockSubtitle) finalContent = await applyTopicSubtitle(finalContent, intent.text, host, env);
-    if (scheduleSlot) proposedScheduleTopic = await scheduleTopicFromUpdate(intent.text, scheduleSlot, env);
+    if (session.hostProvidesBody) {
+      // Host sends complete copy (Lance) → format it faithfully into the intro.
+      finalContent = replaceIntro(template, await generateFormattedBody(intent.text, host, env));
+    } else {
+      finalContent = await mergeWithAI(template, intent.text, session, host, env);
+      if (!session.lockSubtitle) finalContent = await applyTopicSubtitle(finalContent, intent.text, host, env);
+      if (scheduleSlot) proposedScheduleTopic = await scheduleTopicFromUpdate(intent.text, scheduleSlot, env);
+    }
   }
 
   // Append the compliance footer (mailing address + unsubscribe) if one is
@@ -863,14 +863,23 @@ async function buildSessionEmail(session, updateText, env) {
     content = content.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
     return { subject: g.subject, content };
   }
-  // Jeff / Lance training: merge the change into the template + topic subtitle.
-  let content = await mergeWithAI(await env.KV.get(session.templateKey), updateText, session, host, env);
-  if (!session.lockSubtitle) content = await applyTopicSubtitle(content, updateText, host, env);
-  const slot = buildScheduleSlots().find(s => s.sessionKey === session.key);
-  if (slot) {
-    const ov = await getScheduleOverrides(env);
-    ov[slot.key] = await scheduleTopicFromUpdate(updateText, slot, env);
-    await env.KV.put('schedule:overrides', JSON.stringify(ov));
+  // Jeff / Lance training.
+  const template = await env.KV.get(session.templateKey);
+  let content;
+  if (session.hostProvidesBody) {
+    // Lance sends complete copy → format it faithfully into the intro; subtitle
+    // and schedule line stay as the template/default.
+    content = replaceIntro(template, await generateFormattedBody(updateText, host, env));
+  } else {
+    // Jeff sends short notes → minimal merge + topic subtitle + schedule line.
+    content = await mergeWithAI(template, updateText, session, host, env);
+    if (!session.lockSubtitle) content = await applyTopicSubtitle(content, updateText, host, env);
+    const slot = buildScheduleSlots().find(s => s.sessionKey === session.key);
+    if (slot) {
+      const ov = await getScheduleOverrides(env);
+      ov[slot.key] = await scheduleTopicFromUpdate(updateText, slot, env);
+      await env.KV.put('schedule:overrides', JSON.stringify(ov));
+    }
   }
   const footer = await env.KV.get('footer');
   if (footer) content = `${content}\n${footer}`;
@@ -1028,6 +1037,30 @@ RULES:
   return content.replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
 }
 
+
+// Format a host's COMPLETE email copy into faithful HTML for the .intro section,
+// preserving their wording, paragraphs, and any bullet list (rendered as <ul>).
+async function generateFormattedBody(updateText, host, env) {
+  const prompt = `Format the host's email copy into clean HTML for the body of a reminder email. Be FAITHFUL — keep the host's wording, paragraph breaks, and any list.
+
+RULES:
+- Start with exactly: <p>Hi {{ subscriber.first_name }},</p> (replace any greeting line the host wrote, e.g. "Hi <first name>,").
+- Wrap each paragraph in <p>...</p>.
+- If the host wrote a list (e.g. "You'll learn how to:" followed by items), keep the lead-in line as a <p> and render the items as <ul><li>...</li></ul>. Do NOT collapse a list into a sentence.
+- Do not summarize, add, or drop the host's points. Keep their order.
+- Output ONLY the inner HTML (<p> and <ul> elements). No commentary, no markdown fences.
+
+Host's copy:
+${updateText}`;
+  const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  const r = await env.AI.run(model, { messages: [{ role: 'user', content: prompt }], max_tokens: 1400 });
+  return (r.response || '').trim().replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
+}
+
+// Replace the inner content of the template's <div class="intro"> with new HTML.
+function replaceIntro(html, innerHtml) {
+  return html.replace(/(<div class="intro">)[\s\S]*?(<\/div>)/, (m, a, b) => `${a}\n${innerHtml}\n    ${b}`);
+}
 
 // Rewrite the header subtitle (the <p> under the <h1>) to today's topic, keeping
 // the "with <host>" style. Done as a separate targeted step because the full-HTML
