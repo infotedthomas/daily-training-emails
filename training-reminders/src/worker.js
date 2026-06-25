@@ -1025,7 +1025,10 @@ function extractSubjectAndBody(text) {
   let body = String(text || '').trim();
   let subject = null;
   const m = body.match(/^\s*subject(?:\s*line)?\s*:\s*(.+?)\s*$/im);
-  if (m) { subject = m[1].trim(); body = body.replace(m[0], '').trim(); }
+  if (m) {
+    subject = m[1].trim().replace(/^[*_~]+|[*_~]+$/g, '').trim(); // drop Slack markdown (*bold*)
+    body = body.replace(m[0], '').trim();
+  }
   body = body.replace(/^\s*make changes to my[^\n]*\n?/i, '').trim();
   return { subject, body };
 }
