@@ -189,7 +189,7 @@
     <!-- HEADER -->
     <div class="header">
       <h1 style="color: #ffffff;">Ted Thomas Friday Research Tutorial</h1>
-      <p style="color: #ffffff; opacity: 0.9;">How to Narrow Down an Auction List with Lance</p>
+      <p style="color: #ffffff; opacity: 0.9;">Live Research Strategies with Lance</p>
     </div>
 
     <!-- INTRO / CONTENT ABOVE BLUE LINE -->

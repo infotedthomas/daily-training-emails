@@ -69,6 +69,7 @@ function buildSessions(env) {
       sessionTime: '2:00 PM ET',
       templateKey: 'template:friday',
       defaultSubject: 'Today at 2PM - Lance Shows You How to Narrow an Auction List',
+      lockSubtitle: true, // Lance's subheader stays "Live Research Strategies with Lance"
     },
   ];
 }
@@ -556,7 +557,7 @@ async function processSingleSession(session, env, dryRun = false) {
 
   if (intent.type === 'changes') {
     finalContent = await mergeWithAI(template, intent.text, session, host, env);
-    finalContent = await applyTopicSubtitle(finalContent, intent.text, host, env);
+    if (!session.lockSubtitle) finalContent = await applyTopicSubtitle(finalContent, intent.text, host, env);
     if (scheduleSlot) proposedScheduleTopic = await scheduleTopicFromUpdate(intent.text, scheduleSlot, env);
   }
 
@@ -814,19 +815,144 @@ async function verifySlackSignature(request, rawBody, env) {
   return diff === 0;
 }
 
-// Handle a Slack event. (Phase 1: verify + log. Real-time routing/processing
-// with latest-wins is built next, once the subscription is connected.)
+// Next occurrence (date + ISO send time) for a session — today if it's that day
+// and before send time, otherwise the next matching weekday.
+function getNextSendAtISO(session) {
+  const { hour, minute, dow } = nowET();
+  let daysAhead = (session.dayOfWeek - dow + 7) % 7;
+  if (daysAhead === 0) {
+    const past = hour > session.sendHour || (hour === session.sendHour && minute >= session.sendMinute);
+    if (past) daysAhead = 7;
+  }
+  const [y, m, d] = getTodayDateET().split('-').map(Number);
+  const target = new Date(Date.UTC(y, m - 1, d + daysAhead));
+  const dateStr = `${target.getUTCFullYear()}-${pad(target.getUTCMonth() + 1)}-${pad(target.getUTCDate())}`;
+  const offset = getETOffsetHours();
+  return { iso: `${dateStr}T${pad(session.sendHour)}:${pad(session.sendMinute)}:00-${pad(offset)}:00`, dateStr };
+}
+
+// Which session(s) a message is an update for, based on the IBGS marker, the
+// poster's identity, or the coordinator naming a host.
+function routeMessageToSessions(text, userId, env) {
+  const t = text || '';
+  if (/ibgs\s*email\s*:/i.test(t)) return ['thu-ibgs'];
+  const isAdmin = userId && userId === env.ADMIN_SLACK_ID;
+  if (userId === env.DAVID_SLACK_ID || (isAdmin && /\bdavid\b/i.test(t))) return ['mon-training', 'tue-training'];
+  if (userId === env.JEFF_SLACK_ID  || (isAdmin && /\bjeff\s+(austin|a)\b/i.test(t))) return ['thu-training'];
+  if (userId === env.LANCE_SLACK_ID || (isAdmin && /\blance\b/i.test(t))) return ['fri-training'];
+  return [];
+}
+
+// Build {subject, content} for a session from a host's update (no scheduling).
+async function buildSessionEmail(session, updateText, env) {
+  const host = getHost(session.host, env);
+  if (session.key === 'thu-ibgs') {
+    const { content, gen } = await buildIBGS(parseIBGSUpdate(updateText), env);
+    return { subject: gen.subject, content };
+  }
+  if (session.key === 'mon-training' || session.key === 'tue-training') {
+    const g = await generateDavidContent(updateText, session.key === 'mon-training' ? 'monday' : 'tuesday', env);
+    if (g.state) {
+      const ov = await getScheduleOverrides(env);
+      ov.mon = `State Tax Sales: ${g.state} with David`;
+      ov.tue = g.counties ? `County Deep Dive: ${g.counties} with David` : 'County Deep Dive with David';
+      await env.KV.put('schedule:overrides', JSON.stringify(ov));
+    }
+    let content = (await env.KV.get(session.templateKey))
+      .replace('<!--DAVID_SUBTITLE-->', g.subtitle).replace('<!--DAVID_INTRO-->', g.intro);
+    content = content.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
+    return { subject: g.subject, content };
+  }
+  // Jeff / Lance training: merge the change into the template + topic subtitle.
+  let content = await mergeWithAI(await env.KV.get(session.templateKey), updateText, session, host, env);
+  if (!session.lockSubtitle) content = await applyTopicSubtitle(content, updateText, host, env);
+  const slot = buildScheduleSlots().find(s => s.sessionKey === session.key);
+  if (slot) {
+    const ov = await getScheduleOverrides(env);
+    ov[slot.key] = await scheduleTopicFromUpdate(updateText, slot, env);
+    await env.KV.put('schedule:overrides', JSON.stringify(ov));
+  }
+  const footer = await env.KV.get('footer');
+  if (footer) content = `${content}\n${footer}`;
+  if (content.includes('<!--WEEKLY_SCHEDULE-->')) {
+    content = content.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
+  }
+  return { subject: session.defaultSubject, content };
+}
+
+// Real-time: build the email and (re)schedule it, always replacing the prior one
+// for this session so the host's LATEST message wins. While paused, makes a draft.
+async function realtimeProcess(session, updateText, env, paused) {
+  const { subject, content } = await buildSessionEmail(session, updateText, env);
+  const KEY = session.key.replace(/-/g, '_').toUpperCase();
+  const payload = {
+    subject, content,
+    filterType: env[`KIT_${KEY}_FILTER_TYPE`] || env.KIT_DEFAULT_FILTER_TYPE || 'tag',
+    filterId: parseInt(env[`KIT_${KEY}_FILTER_ID`] || env.KIT_DEFAULT_FILTER_ID || '0'),
+    emailTemplateId: parseInt(env.KIT_EMAIL_TEMPLATE_ID || '0') > 0 ? parseInt(env.KIT_EMAIL_TEMPLATE_ID) : undefined,
+  };
+  const { iso: sendAt, dateStr } = getNextSendAtISO(session);
+
+  // Latest-wins: delete whatever we previously created for this session.
+  const ptr = `live:${session.key}`;
+  const prev = await env.KV.get(ptr);
+  if (prev) { try { await deleteKitBroadcast(prev, env); } catch (e) { /* already gone */ } }
+
+  if (!paused) payload.sendAt = sendAt;
+  const b = await createKitBroadcast(payload, env);
+  await env.KV.put(ptr, String(b.id), { expirationTtl: 4 * 86400 });
+  // Mark done so the cron won't also create one for that day.
+  if (!paused) await env.KV.put(`done:${session.key}:${dateStr}`, 'realtime', { expirationTtl: 4 * 86400 });
+
+  const previewUrl = env.WORKER_URL ? `${env.WORKER_URL}/preview?broadcast=${b.id}&token=${env.PREVIEW_TOKEN || ''}` : null;
+  await postToSlack(env, [
+    paused
+      ? `:zap: *${session.label}* — updated in real time (draft only; system paused, not scheduled).`
+      : `:zap: *${session.label}* — updated in real time. Scheduled for ${sendAt}.`,
+    `Subject: ${subject}`,
+    previewUrl ? `:eyes: *Preview:* ${previewUrl}` : null,
+    `Post again to change it — I always use your latest message.`,
+  ].filter(Boolean).join('\n'));
+}
+
+// Handle a Slack message event: route it, then process (latest-wins).
 async function handleSlackEvent(body, env) {
-  // Dedup Slack's retried deliveries.
   if (body.event_id) {
     const seen = `evt:${body.event_id}`;
     if (await env.KV.get(seen)) return;
     await env.KV.put(seen, '1', { expirationTtl: 3600 });
   }
   const ev = body.event || {};
-  const text = ev.subtype === 'message_changed' ? (ev.message && ev.message.text) : ev.text;
-  if (!text || ev.bot_id) return;
-  console.log('Slack event:', JSON.stringify({ subtype: ev.subtype || 'message', user: ev.user || (ev.message && ev.message.user), text: String(text).slice(0, 120) }));
+  const msg = ev.subtype === 'message_changed' ? ev.message : ev;
+  const text = msg && msg.text;
+  const user = msg && msg.user;
+  if (!text || (msg && msg.bot_id)) return;
+  if (ev.subtype && ev.subtype !== 'message_changed') return; // joins, etc.
+
+  const sessionKeys = routeMessageToSessions(text, user, env);
+  if (!sessionKeys.length) return;                 // not a host update we handle
+  // Ignore short chatter (the IBGS marker is always substantive).
+  if (text.trim().length < 25 && !/ibgs\s*email\s*:/i.test(text)) return;
+
+  const paused = !!(await env.KV.get('paused'));
+  const all = buildSessions(env);
+  const cancel = parseIntent(text).type === 'skip';
+  for (const key of sessionKeys) {
+    const session = all.find(s => s.key === key);
+    if (!session) continue;
+    try {
+      if (cancel) {
+        const ptr = `live:${session.key}`;
+        const prev = await env.KV.get(ptr);
+        if (prev) { try { await deleteKitBroadcast(prev, env); } catch (e) {} await env.KV.delete(ptr); }
+        await postToSlack(env, `:no_entry_sign: *${session.label}* — cancelled (no email will go out).`);
+      } else {
+        await realtimeProcess(session, text, env, paused);
+      }
+    } catch (e) {
+      await postToSlack(env, `:x: Real-time update for *${session.label}* failed: ${e.message}`);
+    }
+  }
 }
 
 
