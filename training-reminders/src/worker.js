@@ -239,11 +239,23 @@ export default {
       return json({ ok: true, paused: false });
     }
 
-    // Test David's Mon/Tue generation from his shorthand (returns copy only).
+    // Test David's Mon/Tue generation from his shorthand (assembles a draft).
     if (url.pathname === '/david-test' && request.method === 'POST') {
       const body = await request.json().catch(() => null);
       if (!body || !body.update || !body.day) return json({ error: 'POST {"update":"...","day":"monday|tuesday"}' }, 400);
-      return json(await generateDavidContent(body.update, body.day, env));
+      const day = body.day === 'tuesday' ? 'tuesday' : 'monday';
+      const g = await generateDavidContent(body.update, day, env);
+      const template = await env.KV.get(`template:${day}`);
+      let content = template.replace('<!--DAVID_SUBTITLE-->', g.subtitle).replace('<!--DAVID_INTRO-->', g.intro);
+      if (content.includes('<!--WEEKLY_SCHEDULE-->')) {
+        content = content.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, day === 'tuesday' ? 'tue-training' : 'mon-training'));
+      }
+      const b = await createKitBroadcast({ subject: g.subject, content, filterType: 'tag', filterId: parseInt(env.KIT_DEFAULT_FILTER_ID || '0') }, env);
+      return json({
+        state: g.state, counties: g.counties, student: g.student,
+        subject: g.subject, subtitle: g.subtitle, broadcastId: b.id,
+        preview: env.WORKER_URL ? `${env.WORKER_URL}/preview?broadcast=${b.id}&token=${env.PREVIEW_TOKEN || ''}` : null,
+      });
     }
 
     // Test IBGS generation from raw update text (creates a draft, never sends).
@@ -457,6 +469,12 @@ async function processSingleSession(session, env, dryRun = false) {
   // IBGS is fully host-authored (Lance posts the whole body via an
   // "IBGS email:" message); it has its own generation path.
   if (session.key === 'thu-ibgs') return processIBGS(session, env, dryRun);
+
+  // David's Mon/Tue are generated from his shorthand (state/county/student),
+  // with a generic fallback when he hasn't posted.
+  if (session.key === 'mon-training' || session.key === 'tue-training') {
+    return processDavid(session, env, dryRun);
+  }
 
   // 1. Read Slack for relevant messages
   const message = await findRelevantMessage(session, host, env);
@@ -810,7 +828,7 @@ RULES:
 // student if David mentioned one.
 async function generateDavidContent(update, dayKind, env) {
   const isTue = dayKind === 'tuesday';
-  const prompt = `David runs a daily tax-defaulted-property investing training. From his short note, write the copy for this week's ${isTue ? 'Tuesday COUNTY deep-dive' : 'Monday STATE overview'} reminder email.
+  const prompt = `David runs a daily tax-defaulted-property investing training. From his short note, extract the details and write the copy for this week's ${isTue ? 'Tuesday COUNTY deep-dive' : 'Monday STATE overview'} reminder email.
 
 David's note: "${update}"
 
@@ -819,22 +837,128 @@ Guidance:
     ? 'This is a county-level deep dive within the state. If David named specific counties, feature them by name. If he did NOT name counties, keep it general (e.g. "selected counties in <state>") and do NOT invent county names.'
     : "This is a state-level overview of that state's tax sale rules and what to know before bidding."}
 - If David named a student who requested the topic, reference them warmly once, e.g. "This one goes out to fellow student <Name>, who requested the <state> deep dive."
-- Warm, practical, concise — no hype. Use the subscriber's first name only via the literal token {{ subscriber.first_name }} in the greeting.
+- Warm, practical, concise — no hype. Greeting must be the literal token <p>Hi {{ subscriber.first_name }},</p>.
+- The SUBTITLE should read like "${isTue ? '<State> Counties Deep Dive with David' : '<State> Tax Sales with David'}".
 
 Respond EXACTLY in this format and nothing else:
+STATE: <state name, or NONE>
+COUNTIES: <comma-separated county names, or NONE>
+STUDENT: <student name, or NONE>
 SUBJECT: <subject line>
-SUBTITLE: <short header subtitle, e.g. "Virginia Tax Sales with David">
+SUBTITLE: <short header subtitle>
 INTRO:
 <2 to 4 short HTML <p> paragraphs, starting with <p>Hi {{ subscriber.first_name }},</p>>`;
 
   const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
   const r = await env.AI.run(model, { messages: [{ role: 'user', content: prompt }], max_tokens: 900 });
   const out = (r.response || '').trim();
-  const subject = (out.match(/SUBJECT:\s*(.+)/i) || [])[1]?.trim() || '';
-  const subtitle = (out.match(/SUBTITLE:\s*(.+)/i) || [])[1]?.trim() || '';
+  const grab = (label) => {
+    const m = out.match(new RegExp(label + ':\\s*(.+)', 'i'));
+    const v = m && m[1] ? m[1].trim() : '';
+    return (!v || /^none$/i.test(v)) ? null : v;
+  };
   const intro = (out.split(/INTRO:\s*/i)[1] || '').trim()
     .replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
-  return { subject, subtitle, intro };
+  return {
+    state: grab('STATE'),
+    counties: grab('COUNTIES'),
+    student: grab('STUDENT'),
+    subject: grab('SUBJECT') || (isTue ? 'County Deep Dive Today at 2 PM ET' : 'State Tax Sales Today at 2 PM ET'),
+    subtitle: grab('SUBTITLE') || (isTue ? 'County Deep Dive with David' : 'State Tax Sales with David'),
+    intro,
+  };
+}
+
+// State-less fallback when David hasn't posted anything by processing time.
+function genericDavidContent(dayKind) {
+  if (dayKind === 'tuesday') {
+    return {
+      subject: 'Today at 2PM - County Deep Dive Training with David',
+      subtitle: 'County Deep Dive with David',
+      intro: `      <p>Hi {{ subscriber.first_name }},</p>\n      <p>Join David today at <strong>2:00 PM Eastern</strong> for a live county deep dive — how to research and evaluate tax-defaulted properties at the county level.</p>\n      <p>Bring your questions and follow along live.</p>`,
+    };
+  }
+  return {
+    subject: 'Today at 2PM - State Tax Sales Training with David',
+    subtitle: 'State Tax Sales with David',
+    intro: `      <p>Hi {{ subscriber.first_name }},</p>\n      <p>Join David today at <strong>2:00 PM Eastern</strong> for a live breakdown of state tax sale rules and what you need to know before bidding.</p>\n      <p>Bring your questions and follow along live.</p>`,
+  };
+}
+
+// Collect David's recent posts (state note + any later county note) as context.
+async function findDavidUpdate(env) {
+  const oldest = Math.floor(Date.now() / 1000) - 4 * 86400;
+  const params = new URLSearchParams({ channel: env.SLACK_CHANNEL_ID, oldest: String(oldest), limit: '100' });
+  const resp = await fetch(`https://slack.com/api/conversations.history?${params}`, {
+    headers: { Authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
+  });
+  const data = await resp.json();
+  if (!data.ok) return null;
+  const david = getHost('david', env);
+  const msgs = (data.messages || []).filter(m => !m.bot_id && !m.subtype && m.user === david.slackId && (m.text || '').trim());
+  if (!msgs.length) return null;
+  return msgs.slice(0, 4).reverse().map(m => m.text).join('\n---\n'); // oldest-first context
+}
+
+async function processDavid(session, env, dryRun = false) {
+  const dayKind = session.key === 'mon-training' ? 'monday' : 'tuesday';
+  const note = await findDavidUpdate(env);
+  const usedDefault = !note;
+  const g = note ? await generateDavidContent(note, dayKind, env) : genericDavidContent(dayKind);
+
+  const template = await env.KV.get(session.templateKey);
+  if (!template) throw new Error(`No ${session.templateKey} in KV.`);
+
+  // Set the shared schedule lines from David's state/counties (covers both days).
+  if (!usedDefault && g.state) {
+    const overrides = await getScheduleOverrides(env);
+    overrides.mon = `State Tax Sales: ${g.state} with David`;
+    overrides.tue = g.counties ? `County Deep Dive: ${g.counties} with David` : 'County Deep Dive with David';
+    await env.KV.put('schedule:overrides', JSON.stringify(overrides));
+  }
+
+  let content = template
+    .replace('<!--DAVID_SUBTITLE-->', g.subtitle)
+    .replace('<!--DAVID_INTRO-->', g.intro);
+  if (content.includes('<!--WEEKLY_SCHEDULE-->')) {
+    content = content.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
+  }
+
+  const KEY = session.key.replace(/-/g, '_').toUpperCase();
+  const broadcastPayload = {
+    subject: g.subject, content,
+    filterType: env[`KIT_${KEY}_FILTER_TYPE`] || env.KIT_DEFAULT_FILTER_TYPE || 'tag',
+    filterId: parseInt(env[`KIT_${KEY}_FILTER_ID`] || env.KIT_DEFAULT_FILTER_ID || '0'),
+    emailTemplateId: parseInt(env.KIT_EMAIL_TEMPLATE_ID || '0') > 0 ? parseInt(env.KIT_EMAIL_TEMPLATE_ID) : undefined,
+  };
+  const sendAt = getSendAtISO(session.sendHour, session.sendMinute);
+  const previewLink = id => env.WORKER_URL ? `${env.WORKER_URL}/preview?broadcast=${id}&token=${env.PREVIEW_TOKEN || ''}` : null;
+  const summary = usedDefault
+    ? '(No update from David — generic version.)'
+    : `${g.state || '?'}${g.counties ? ' — ' + g.counties : ''}${g.student ? ' — for ' + g.student : ''}`;
+
+  if (dryRun) {
+    const b = await createKitBroadcast(broadcastPayload, env);
+    await postToSlack(env, [
+      `:test_tube: *${session.label}* — DRY RUN draft (will NOT send).`,
+      `Subject: ${g.subject}`, summary,
+      previewLink(b.id) ? `:eyes: *Preview:* ${previewLink(b.id)}` : null,
+    ].filter(Boolean).join('\n'));
+    return { session: session.key, action: 'dry_run', broadcastId: b.id };
+  }
+
+  broadcastPayload.sendAt = sendAt;
+  const broadcast = await createKitBroadcast(broadcastPayload, env);
+  await postToSlack(env, [
+    usedDefault
+      ? `:white_check_mark: *${session.label}* — Scheduled (generic — no update from David).`
+      : `:white_check_mark: *${session.label}* — Scheduled. ${summary}`,
+    `Subject: ${g.subject}`,
+    `Sends at ${formatTime(session.sendHour, session.sendMinute)} ET.`,
+    previewLink(broadcast.id) ? `:eyes: *Preview:* ${previewLink(broadcast.id)}` : null,
+    `Reply *cancel* to stop it, or post a correction to change it.`,
+  ].filter(Boolean).join('\n'));
+  return { session: session.key, action: usedDefault ? 'scheduled_generic' : 'scheduled_with_update', broadcastId: broadcast.id };
 }
 
 

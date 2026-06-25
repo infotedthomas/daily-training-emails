@@ -177,16 +177,12 @@
     <!-- HEADER -->
     <div class="header">
       <h1 style="color: #ffffff;">Today's Live Session</h1>
-      <p style="color: #ffffff; opacity: 0.9;">Virginia Tax Sales with David</p>
+      <p style="color: #ffffff; opacity: 0.9;"><!--DAVID_SUBTITLE--></p>
     </div>
 
     <!-- INTRO / CONTENT ABOVE BLUE LINE -->
     <div class="intro">
-      <p>Hi {{ subscriber.first_name }},</p>
-      <p>Join David today for a live breakdown of Virginia's tax sale rules and what you need to know before bidding in the Old Dominion State.</p>
-      <p>This one goes out to fellow student <strong>Thomas Ball</strong>, who requested the Virginia deep dive.</p>
-      <p>David will walk through what you need to know <em>before</em> bidding, including whether counties follow different rules, if auctions are live or online, deposit requirements and payment methods, bidding procedures, redemption periods and penalties, what happens to mortgages and liens after tax sales, and what state statutes say.</p>
-      <p>If you're considering Virginia, this session will help you understand the process so you can approach auctions with confidence and avoid costly mistakes.</p>
+<!--DAVID_INTRO-->
     </div>
 
     <!-- CTA SECTION BELOW BLUE LINE -->

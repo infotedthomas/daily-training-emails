@@ -177,15 +177,12 @@
     <!-- HEADER -->
     <div class="header">
       <h1 style="color: #ffffff;">Today's Live Session</h1>
-      <p style="color: #ffffff; opacity: 0.9;">Virginia Counties Deep Dive with David</p>
+      <p style="color: #ffffff; opacity: 0.9;"><!--DAVID_SUBTITLE--></p>
     </div>
 
     <!-- INTRO / CONTENT ABOVE BLUE LINE -->
     <div class="intro">
-      <p>Hi {{ subscriber.first_name }},</p>
-      <p>Just a reminder that David's county deep dive session is today at <strong>2:00 PM Eastern</strong>.</p>
-      <p>Building on Monday's Virginia overview, today David digs into three locations at the request of fellow student <strong>Thomas Ball</strong>: <strong>Fairfax County</strong>, <strong>Fluvanna County</strong>, and <strong>Martinsville City</strong> (an independent city in the Henry County area). Watch him search public records for liens and encumbrances, identify hidden issues that affect value, use free online resources most investors don't know about, and evaluate whether properties are worth bidding on.</p>
-      <p>This hands-on training could save you from costly mistakes and help you spot opportunities others miss.</p>
+<!--DAVID_INTRO-->
     </div>
 
     <!-- CTA SECTION BELOW BLUE LINE -->
