@@ -20,14 +20,15 @@ const path = require('path');
 
 const VALID = ['monday', 'tuesday', 'thursday', 'ibgs', 'friday'];
 
-// Default mapping from template type -> source file in the parent folder.
-const PARENT = path.resolve(__dirname, '..', '..');
+// Default mapping from template type -> source file. The LIVE templates the bot
+// uses live in ../current/. Generic backups (for manual sending) are in ../default/.
+const CURRENT = path.resolve(__dirname, '..', '..', 'current');
 const ALL_FILES = {
-  monday:   path.join(PARENT, '1 Monday email.txt'),
-  tuesday:  path.join(PARENT, '2 Tuesday email.txt'),
-  thursday: path.join(PARENT, '3 Thursday email.txt'),
-  friday:   path.join(PARENT, '4 Friday email.txt'),
-  ibgs:     path.join(PARENT, 'IBGS reminder email.txt'),
+  monday:   path.join(CURRENT, '1 Monday email.txt'),
+  tuesday:  path.join(CURRENT, '2 Tuesday email.txt'),
+  thursday: path.join(CURRENT, '3 Thursday email.txt'),
+  friday:   path.join(CURRENT, '4 Friday email.txt'),
+  ibgs:     path.join(CURRENT, 'IBGS reminder email.txt'),
 };
 
 const workerUrl = process.env.WORKER_URL || 'http://localhost:8787';
