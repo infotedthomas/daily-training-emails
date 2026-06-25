@@ -115,8 +115,8 @@ async function getScheduleData(env) {
   });
 }
 
-async function renderScheduleBlock(env, todaySessionKey) {
-  const overrides = await getScheduleOverrides(env);
+async function renderScheduleBlock(env, todaySessionKey, extraOverrides = null) {
+  const overrides = { ...(await getScheduleOverrides(env)), ...(extraOverrides || {}) };
   const rows = buildScheduleSlots().map(s => {
     const topic = (overrides[s.key] && String(overrides[s.key]).trim()) || s.label;
     const star = s.members ? '*' : '';
@@ -132,11 +132,37 @@ async function renderScheduleBlock(env, todaySessionKey) {
   ].join('\n');
 }
 
+// Turn a host's free-form Slack update into a SHORT schedule line for their
+// slot, styled like the slot's generic default. Used to auto-update the weekly
+// schedule when a host posts. Falls back to the default on any error.
+async function scheduleTopicFromUpdate(hostText, slot, env) {
+  const prompt = `Rewrite the host's update as ONE short "This Week's Sessions" schedule line.
+Match the style, format, and length of this example exactly (keep the "with <name>" ending if present):
+"${slot.label}"
+Host update: ${hostText}
+Output ONLY the line itself — no quotes, no trailing period, no preamble, max ~10 words.`;
+  try {
+    const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    const result = await env.AI.run(model, { messages: [{ role: 'user', content: prompt }], max_tokens: 48 });
+    const line = (result.response || '').trim().split('\n')[0].replace(/^["']|["']$/g, '').replace(/\.\s*$/, '').trim();
+    return line || slot.label;
+  } catch (e) {
+    return slot.label;
+  }
+}
+
 
 // --------------- ENTRY POINTS ---------------
 
 export default {
   async scheduled(event, env, ctx) {
+    // Global kill-switch: while paused, no cron does anything (no drafts, no
+    // sends, no approvals). Toggle with POST /pause and POST /resume.
+    if (await env.KV.get('paused')) {
+      console.log('Paused — skipping cron', event.cron);
+      return;
+    }
+
     // The morning cron runs the draft phase; every other cron is an approval
     // sweep. Running approval on a recurring schedule (not just once) closes the
     // late-approval gap and avoids brittle exact-string cron matching.
@@ -187,6 +213,16 @@ export default {
     }
     if (url.pathname === '/phase2' && request.method === 'POST') {
       return json(await runApprovalPhase(env));
+    }
+
+    // Global pause / resume — while paused, all cron runs are skipped.
+    if (url.pathname === '/pause' && request.method === 'POST') {
+      await env.KV.put('paused', '1');
+      return json({ ok: true, paused: true });
+    }
+    if (url.pathname === '/resume' && request.method === 'POST') {
+      await env.KV.delete('paused');
+      return json({ ok: true, paused: false });
     }
     if (url.pathname === '/trigger' && request.method === 'POST') {
       const key = url.searchParams.get('session');
@@ -364,9 +400,15 @@ async function processSingleSession(session, env, dryRun = false) {
   let subject = intent.subject || session.defaultSubject;
   let needsApproval = false;
 
+  // The schedule slot for this session; when a host posts changes we also derive
+  // a proposed schedule line so the weekly schedule stays in sync.
+  const scheduleSlot = buildScheduleSlots().find(s => s.sessionKey === session.key);
+  let proposedScheduleTopic = null;
+
   if (intent.type === 'changes') {
     finalContent = await mergeWithAI(template, intent.text, session, host, env);
     needsApproval = true;
+    if (scheduleSlot) proposedScheduleTopic = await scheduleTopicFromUpdate(intent.text, scheduleSlot, env);
   }
 
   // Append the compliance footer (mailing address + unsubscribe) if one is
@@ -381,7 +423,11 @@ async function processSingleSession(session, env, dryRun = false) {
   // marking this session's row "← Today". Built fresh so it always reflects the
   // latest topics (manual or host-driven).
   if (finalContent.includes('<!--WEEKLY_SCHEDULE-->')) {
-    finalContent = finalContent.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
+    // If a schedule line was proposed from the host's post, show it on this
+    // email's own row immediately (it's persisted for the rest of the week only
+    // once the change is approved).
+    const extra = (proposedScheduleTopic && scheduleSlot) ? { [scheduleSlot.key]: proposedScheduleTopic } : null;
+    finalContent = finalContent.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key, extra));
   }
 
   // 6. Create broadcast in Kit
@@ -426,6 +472,7 @@ async function processSingleSession(session, env, dryRun = false) {
       `:memo: *${session.label}* — Draft ready with changes.`,
       `Subject: ${subject}`,
       `Changes from ${host.name}: "${truncate(intent.text, 150)}"`,
+      proposedScheduleTopic ? `:calendar: Schedule line → "${proposedScheduleTopic}"` : null,
       previewUrl ? `:eyes: *Preview the email:* ${previewUrl}` : null,
       ``,
       `Reply *go ahead* to schedule for ${formatTime(session.sendHour, session.sendMinute)} ET.`,
@@ -440,6 +487,8 @@ async function processSingleSession(session, env, dryRun = false) {
       sessionKey: session.key,
       sessionLabel: session.label,
       sendAt,
+      scheduleSlot: scheduleSlot ? scheduleSlot.key : null,
+      scheduleTopic: proposedScheduleTopic || null,
     }), { expirationTtl: 86400 }); // auto-expire after 24h
 
     return { session: session.key, action: 'pending_approval', broadcastId: broadcast.id };
@@ -494,6 +543,14 @@ async function checkApproval(pending, kvKey, env) {
   const cancelled = replies.some(r => cancelMatch.test(r.text));
 
   if (approved) {
+    // Persist the host-derived schedule line for the rest of the week so every
+    // other email reflects it too (the approver saw it in the preview message).
+    if (pending.scheduleSlot && pending.scheduleTopic) {
+      const overrides = await getScheduleOverrides(env);
+      overrides[pending.scheduleSlot] = pending.scheduleTopic;
+      await env.KV.put('schedule:overrides', JSON.stringify(overrides));
+    }
+
     // If approval landed after the planned send time, Kit can't schedule in the
     // past — bump to ~2 minutes out so a late "go ahead" still goes out.
     let sendAt = pending.sendAt;
