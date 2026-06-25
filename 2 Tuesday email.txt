@@ -176,8 +176,8 @@
 
     <!-- HEADER -->
     <div class="header">
-      <h1>Today's Live Session</h1>
-      <p>Virginia Counties Deep Dive with David</p>
+      <h1 style="color: #ffffff;">Today's Live Session</h1>
+      <p style="color: #ffffff; opacity: 0.9;">Virginia Counties Deep Dive with David</p>
     </div>
 
     <!-- INTRO / CONTENT ABOVE BLUE LINE -->
@@ -198,16 +198,7 @@
     </div>
 
     <!-- WEEKLY SCHEDULE -->
-    <div class="weekly-schedule">
-      <p class="schedule-header">This Week's Sessions</p>
-      <p><strong>Monday 2:00 PM</strong> - State Tax Sales: Virginia with David</p>
-      <p><strong>Tuesday 2:00 PM</strong> - County Deep Dive: Fairfax, Fluvanna & Martinsville with David <strong>← Today</strong></p>
-      <p><strong>Wednesday 9:00 PM</strong> - Weekly Q&A with a Certified Coach</p>
-      <p><strong>Thursday 2:00 PM</strong> - Online Auction Tools with Coach Jeff Austin</p>
-      <p><strong>Thursday 3:00 PM</strong> - Intensive Business Growth System (IBGS)*</p>
-      <p><strong>Friday 2:00 PM</strong> - Live Research Strategies with Lance</p>
-      <p style="margin-top: 10px; font-size: 12px; color: #999;">*Available to registered members only</p>
-    </div>
+    <!--WEEKLY_SCHEDULE-->
 
     <!-- FOOTER -->
     <div class="footer">

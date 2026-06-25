@@ -83,6 +83,56 @@ function getHost(hostKey, env) {
 }
 
 
+// --------------- WEEKLY SCHEDULE (shared across all emails) ---------------
+//
+// One schedule, injected into every template at the <!--WEEKLY_SCHEDULE-->
+// placeholder, with the current session's row marked "← Today". Each slot has a
+// generic default; anything stored in KV ('schedule:overrides') replaces it.
+// Update overrides anytime (manually via /schedule, or from host Slack posts),
+// and every email built afterward reflects the latest.
+
+function buildScheduleSlots() {
+  return [
+    { key: 'mon',  day: 'Monday',    time: '2:00 PM', label: 'State Tax Sales with David',                  sessionKey: 'mon-training' },
+    { key: 'tue',  day: 'Tuesday',   time: '2:00 PM', label: 'County Deep Dive with David',                 sessionKey: 'tue-training' },
+    { key: 'wed',  day: 'Wednesday', time: '9:00 PM', label: 'Weekly Q&A with a Certified Coach',           sessionKey: null },
+    { key: 'thu',  day: 'Thursday',  time: '2:00 PM', label: 'Online Auction Tools with Coach Jeff Austin', sessionKey: 'thu-training' },
+    { key: 'ibgs', day: 'Thursday',  time: '3:00 PM', label: 'Intensive Business Growth System (IBGS)',     sessionKey: 'thu-ibgs', members: true },
+    { key: 'fri',  day: 'Friday',    time: '2:00 PM', label: 'Live Research Strategies with Lance',         sessionKey: 'fri-training' },
+  ];
+}
+
+async function getScheduleOverrides(env) {
+  try { return JSON.parse(await env.KV.get('schedule:overrides') || '{}'); }
+  catch (e) { return {}; }
+}
+
+async function getScheduleData(env) {
+  const overrides = await getScheduleOverrides(env);
+  return buildScheduleSlots().map(s => {
+    const ov = overrides[s.key] && String(overrides[s.key]).trim();
+    return { key: s.key, day: s.day, time: s.time, topic: ov || s.label, isDefault: !ov };
+  });
+}
+
+async function renderScheduleBlock(env, todaySessionKey) {
+  const overrides = await getScheduleOverrides(env);
+  const rows = buildScheduleSlots().map(s => {
+    const topic = (overrides[s.key] && String(overrides[s.key]).trim()) || s.label;
+    const star = s.members ? '*' : '';
+    const today = s.sessionKey && s.sessionKey === todaySessionKey ? ' <strong>← Today</strong>' : '';
+    return `      <p><strong>${s.day} ${s.time}</strong> - ${topic}${star}${today}</p>`;
+  }).join('\n');
+  return [
+    '    <div class="weekly-schedule">',
+    `      <p class="schedule-header">This Week's Sessions</p>`,
+    rows,
+    '      <p style="margin-top: 10px; font-size: 12px; color: #999;">*Available to registered members only</p>',
+    '    </div>',
+  ].join('\n');
+}
+
+
 // --------------- ENTRY POINTS ---------------
 
 export default {
@@ -192,6 +242,35 @@ export default {
       return json({ templates: list.keys.map(k => k.name) });
     }
 
+    // Weekly schedule (shared across all emails).
+    //   GET    /schedule              -> current slots (topic + isDefault)
+    //   POST   /schedule  {mon:"..."} -> set/merge overrides ("" clears a slot)
+    //   DELETE /schedule              -> reset all slots to generic defaults
+    if (url.pathname === '/schedule') {
+      const validKeys = new Set(buildScheduleSlots().map(s => s.key));
+      if (request.method === 'GET') {
+        return json({ schedule: await getScheduleData(env) });
+      }
+      if (request.method === 'POST') {
+        const body = await request.json().catch(() => null);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          return json({ error: 'Send JSON like {"mon":"State Tax Sales: Virginia with David"}', validSlots: [...validKeys] }, 400);
+        }
+        const overrides = await getScheduleOverrides(env);
+        for (const [k, v] of Object.entries(body)) {
+          if (!validKeys.has(k)) return json({ error: `Unknown slot "${k}"`, validSlots: [...validKeys] }, 400);
+          if (v === '' || v === null) delete overrides[k];
+          else overrides[k] = String(v);
+        }
+        await env.KV.put('schedule:overrides', JSON.stringify(overrides));
+        return json({ ok: true, schedule: await getScheduleData(env) });
+      }
+      if (request.method === 'DELETE') {
+        await env.KV.delete('schedule:overrides');
+        return json({ ok: true, reset: true, schedule: await getScheduleData(env) });
+      }
+    }
+
     // Compliance footer (mailing address + unsubscribe), appended to every broadcast.
     if (url.pathname === '/footer') {
       if (request.method === 'PUT') {
@@ -297,6 +376,13 @@ async function processSingleSession(session, env, dryRun = false) {
   // (Skip this if your Kit email template already includes the footer.)
   const footer = await env.KV.get('footer');
   if (footer) finalContent = `${finalContent}\n${footer}`;
+
+  // Inject the shared weekly schedule wherever the template has the placeholder,
+  // marking this session's row "← Today". Built fresh so it always reflects the
+  // latest topics (manual or host-driven).
+  if (finalContent.includes('<!--WEEKLY_SCHEDULE-->')) {
+    finalContent = finalContent.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
+  }
 
   // 6. Create broadcast in Kit
   const sendAt = getSendAtISO(session.sendHour, session.sendMinute);
