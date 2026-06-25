@@ -250,6 +250,23 @@ export default {
       return json({ ok: true, paused: false });
     }
 
+    // Test the merge path (Jeff/Lance training) from a host's update text.
+    if (url.pathname === '/merge-test' && request.method === 'POST') {
+      const body = await request.json().catch(() => null);
+      if (!body || !body.text || !body.session) return json({ error: 'POST {"text":"...","session":"thu-training"}' }, 400);
+      const session = buildSessions(env).find(s => s.key === body.session);
+      if (!session) return json({ error: 'unknown session' }, 400);
+      const host = getHost(session.host, env);
+      const template = await env.KV.get(session.templateKey);
+      let content = await mergeWithAI(template, body.text, session, host, env);
+      content = await applyTopicSubtitle(content, body.text, host, env);
+      if (content.includes('<!--WEEKLY_SCHEDULE-->')) {
+        content = content.replace('<!--WEEKLY_SCHEDULE-->', await renderScheduleBlock(env, session.key));
+      }
+      const b = await createKitBroadcast({ subject: session.defaultSubject, content, filterType: 'tag', filterId: parseInt(env.KIT_DEFAULT_FILTER_ID || '0') }, env);
+      return json({ subject: session.defaultSubject, broadcastId: b.id, preview: env.WORKER_URL ? `${env.WORKER_URL}/preview?broadcast=${b.id}&token=${env.PREVIEW_TOKEN || ''}` : null });
+    }
+
     // Test David's Mon/Tue generation from his shorthand (assembles a draft).
     if (url.pathname === '/david-test' && request.method === 'POST') {
       const body = await request.json().catch(() => null);
@@ -520,6 +537,7 @@ async function processSingleSession(session, env, dryRun = false) {
 
   if (intent.type === 'changes') {
     finalContent = await mergeWithAI(template, intent.text, session, host, env);
+    finalContent = await applyTopicSubtitle(finalContent, intent.text, host, env);
     if (scheduleSlot) proposedScheduleTopic = await scheduleTopicFromUpdate(intent.text, scheduleSlot, env);
   }
 
@@ -802,9 +820,9 @@ HERE IS THE CURRENT HTML EMAIL:
 ${template}
 
 RULES:
-- Make the SMALLEST possible edit. Change ONLY the paragraph(s) that describe what the session covers (its topic/agenda) and add any preparation instructions the host gave.
-- Keep EVERYTHING ELSE byte-for-byte: the <h1> title, the header subtitle/tagline, the greeting line, the "Quick reminder – ... is today at ..." line, the weekly schedule, the button, all HTML tags, CSS, styles, links, and the footer.
-- NEVER change the host's name, the session title, or the branding wording. The host's message is a brief; do not copy its phrasing (e.g. "Jeff's Thursday training") into the title or headings.
+- Change ONLY the body paragraph(s) that describe what the session covers (its topic/agenda), plus any prep instructions the host gave. Phrase cleanly; don't copy the host's casual wording verbatim.
+- Keep EVERYTHING ELSE byte-for-byte: the <h1> title, the header subtitle, the greeting, the "Quick reminder – ... is today at ..." line, the weekly schedule, the button, all HTML tags, CSS, styles, links, and the footer.
+- NEVER change the host's name.
 - NEVER alter, move, or remove the footer, the mailing address, or the unsubscribe link/merge fields. They are legally required and must pass through byte-for-byte.
 - Do not add new HTML sections or restructure the layout. Do not invent content the host didn't mention.
 - Leave all merge fields (e.g. {{ subscriber.first_name }}, {{ address }}) exactly as written.
@@ -825,6 +843,28 @@ RULES:
 
   // Strip markdown fences if present
   return content.replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim();
+}
+
+
+// Rewrite the header subtitle (the <p> under the <h1>) to today's topic, keeping
+// the "with <host>" style. Done as a separate targeted step because the full-HTML
+// merge is unreliable at editing the subtitle.
+async function applyTopicSubtitle(html, updateText, host, env) {
+  const SUB = /(<h1[^>]*>[\s\S]*?<\/h1>\s*<p[^>]*>)([\s\S]*?)(<\/p>)/;
+  const m = html.match(SUB);
+  if (!m) return html;
+  const current = m[2].replace(/<[^>]+>/g, '').trim();
+  const prompt = `Rewrite this training-email header subtitle to name today's topic, keeping a "with ${host.name}" style ending. Output ONLY the new subtitle — no quotes, no trailing period, max ~10 words.
+Current subtitle: "${current}"
+Host's note: "${updateText}"`;
+  let next = current;
+  try {
+    const r = await env.AI.run(env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      { messages: [{ role: 'user', content: prompt }], max_tokens: 40 });
+    const line = (r.response || '').trim().split('\n')[0].replace(/^["']|["']$/g, '').replace(/\.\s*$/, '').trim();
+    if (line) next = line;
+  } catch (e) { /* keep current subtitle on failure */ }
+  return html.replace(SUB, (full, a, b, c) => a + next + c);
 }
 
 
