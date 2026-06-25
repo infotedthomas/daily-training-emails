@@ -115,9 +115,24 @@ function buildScheduleSlots() {
   ];
 }
 
+// Monday's date (ET) for the current week — used to auto-expire overrides weekly.
+function getWeekKey() {
+  const { dow } = nowET();
+  const [y, m, d] = getTodayDateET().split('-').map(Number);
+  const monday = new Date(Date.UTC(y, m - 1, d - ((dow + 6) % 7)));
+  return `${monday.getUTCFullYear()}-${pad(monday.getUTCMonth() + 1)}-${pad(monday.getUTCDate())}`;
+}
+
 async function getScheduleOverrides(env) {
-  try { return JSON.parse(await env.KV.get('schedule:overrides') || '{}'); }
-  catch (e) { return {}; }
+  try {
+    if ((await env.KV.get('schedule:week')) !== getWeekKey()) return {}; // new week → generics
+    return JSON.parse(await env.KV.get('schedule:overrides') || '{}');
+  } catch (e) { return {}; }
+}
+
+async function setScheduleOverrides(env, overrides) {
+  await env.KV.put('schedule:week', getWeekKey());
+  await env.KV.put('schedule:overrides', JSON.stringify(overrides));
 }
 
 async function getScheduleData(env) {
@@ -395,11 +410,11 @@ export default {
           if (v === '' || v === null) delete overrides[k];
           else overrides[k] = String(v);
         }
-        await env.KV.put('schedule:overrides', JSON.stringify(overrides));
+        await setScheduleOverrides(env, overrides);
         return json({ ok: true, schedule: await getScheduleData(env) });
       }
       if (request.method === 'DELETE') {
-        await env.KV.delete('schedule:overrides');
+        await env.KV.delete('schedule:overrides'); await env.KV.delete('schedule:week');
         return json({ ok: true, reset: true, schedule: await getScheduleData(env) });
       }
     }
@@ -619,7 +634,7 @@ async function processSingleSession(session, env, dryRun = false) {
   if (proposedScheduleTopic && scheduleSlot) {
     const overrides = await getScheduleOverrides(env);
     overrides[scheduleSlot.key] = proposedScheduleTopic;
-    await env.KV.put('schedule:overrides', JSON.stringify(overrides));
+    await setScheduleOverrides(env, overrides);
   }
 
   broadcastPayload.sendAt = sendAt;
@@ -682,7 +697,7 @@ async function checkApproval(pending, kvKey, env) {
     if (pending.scheduleSlot && pending.scheduleTopic) {
       const overrides = await getScheduleOverrides(env);
       overrides[pending.scheduleSlot] = pending.scheduleTopic;
-      await env.KV.put('schedule:overrides', JSON.stringify(overrides));
+      await setScheduleOverrides(env, overrides);
     }
 
     // If approval landed after the planned send time, Kit can't schedule in the
@@ -858,7 +873,7 @@ async function buildSessionEmail(session, rawUpdate, env) {
       const ov = await getScheduleOverrides(env);
       ov.mon = `State Tax Sales: ${g.state} with David`;
       ov.tue = g.counties ? `County Deep Dive: ${g.counties} with David` : 'County Deep Dive with David';
-      await env.KV.put('schedule:overrides', JSON.stringify(ov));
+      await setScheduleOverrides(env, ov);
     }
     let content = (await env.KV.get(session.templateKey))
       .replace('<!--DAVID_SUBTITLE-->', g.subtitle).replace('<!--DAVID_INTRO-->', g.intro);
@@ -880,7 +895,7 @@ async function buildSessionEmail(session, rawUpdate, env) {
     if (slot) {
       const ov = await getScheduleOverrides(env);
       ov[slot.key] = await scheduleTopicFromUpdate(updateText, slot, env);
-      await env.KV.put('schedule:overrides', JSON.stringify(ov));
+      await setScheduleOverrides(env, ov);
     }
   }
   const footer = await env.KV.get('footer');
@@ -1189,7 +1204,7 @@ async function processDavid(session, env, dryRun = false) {
     const overrides = await getScheduleOverrides(env);
     overrides.mon = `State Tax Sales: ${g.state} with David`;
     overrides.tue = g.counties ? `County Deep Dive: ${g.counties} with David` : 'County Deep Dive with David';
-    await env.KV.put('schedule:overrides', JSON.stringify(overrides));
+    await setScheduleOverrides(env, overrides);
   }
 
   let content = template
