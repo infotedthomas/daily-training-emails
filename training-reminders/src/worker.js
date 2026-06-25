@@ -506,7 +506,10 @@ async function runProcess(env, sessionFilter) {
 
 // Nudge hosts who haven't posted an update yet, ahead of their send time.
 async function runReminders(env, kind) {
+  const today = getTodayDateET();
   if (kind === 'ibgs') {
+    // Already scheduled (e.g. a real-time post) → no reminder needed.
+    if (await env.KV.get(`done:thu-ibgs:${today}`)) return { phase: 'reminder-ibgs', action: 'already_scheduled' };
     const update = await findIBGSUpdate(env);
     if (update) return { phase: 'reminder-ibgs', action: 'already_posted' };
     const lance = getHost('lance', env);
@@ -520,6 +523,8 @@ async function runReminders(env, kind) {
   const todays = sessions.filter(s => s.dayOfWeek === todayDow && s.key !== 'thu-ibgs');
   const results = [];
   for (const session of todays) {
+    // Already scheduled (e.g. a real-time post earlier) → skip the reminder.
+    if (await env.KV.get(`done:${session.key}:${today}`)) { results.push({ session: session.key, action: 'already_scheduled' }); continue; }
     const host = getHost(session.host, env);
     const msg = await findRelevantMessage(session, host, env);
     if (msg) { results.push({ session: session.key, action: 'already_posted' }); continue; }
