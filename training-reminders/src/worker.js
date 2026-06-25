@@ -248,8 +248,15 @@ export default {
       if (!env.ADMIN_TOKEN || (t !== env.ADMIN_TOKEN && t !== env.PREVIEW_TOKEN)) {
         return json({ error: 'Unauthorized' }, 401);
       }
-      const id = url.searchParams.get('broadcast');
-      if (!id) return json({ error: 'Pass ?broadcast=ID' }, 400);
+      // ?session=<key> resolves to that session's CURRENT broadcast (stable link
+      // that always points to the live one, never a replaced/deleted draft).
+      let id = url.searchParams.get('broadcast');
+      const sess = url.searchParams.get('session');
+      if (sess) id = await env.KV.get(`live:${sess}`);
+      if (!id) {
+        return new Response('<p style="font-family:sans-serif;padding:20px;">No current scheduled email for this session yet.</p>',
+          { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      }
       const r = await fetch(`https://api.kit.com/v4/broadcasts/${id}`, {
         headers: { 'X-Kit-Api-Key': env.KIT_API_KEY },
       });
@@ -638,9 +645,8 @@ async function processSingleSession(session, env, dryRun = false) {
 
   broadcastPayload.sendAt = sendAt;
   const broadcast = await createKitBroadcast(broadcastPayload, env);
-  const previewUrl = env.WORKER_URL
-    ? `${env.WORKER_URL}/preview?broadcast=${broadcast.id}&token=${env.PREVIEW_TOKEN || ''}`
-    : null;
+  await env.KV.put(`live:${session.key}`, String(broadcast.id), { expirationTtl: 4 * 86400 });
+  const link = env.WORKER_URL ? `${env.WORKER_URL}/preview?session=${session.key}&token=${env.PREVIEW_TOKEN || ''}` : null;
 
   await postToSlack(env, [
     changed
@@ -650,6 +656,7 @@ async function processSingleSession(session, env, dryRun = false) {
     changed ? `Changes: "${truncate(intent.text, 150)}"` : null,
     proposedScheduleTopic ? `:calendar: Schedule line → "${proposedScheduleTopic}"` : null,
     `Sends at ${formatTime(session.sendHour, session.sendMinute)} ET.`,
+    link ? `:eyes: *Preview (always the current version):* ${link}` : null,
     `Reply *cancel* to stop it, or post a correction to change it.`,
   ].filter(Boolean).join('\n'));
 
@@ -935,12 +942,15 @@ async function realtimeProcess(session, updateText, env, paused) {
   // Mark done so the cron won't also create one for that day.
   if (!paused) await env.KV.put(`done:${session.key}:${dateStr}`, 'realtime', { expirationTtl: 4 * 86400 });
 
-  const previewUrl = env.WORKER_URL ? `${env.WORKER_URL}/preview?broadcast=${b.id}&token=${env.PREVIEW_TOKEN || ''}` : null;
+  // Link only the FINALIZED (scheduled) broadcast, and via a stable per-session
+  // URL that always resolves to the current one (never a replaced/deleted draft).
+  const link = (!paused && env.WORKER_URL) ? `${env.WORKER_URL}/preview?session=${session.key}&token=${env.PREVIEW_TOKEN || ''}` : null;
   await postToSlack(env, [
     paused
       ? `:zap: *${session.label}* — updated in real time (draft only; system paused, not scheduled).`
       : `:zap: *${session.label}* — updated in real time. Scheduled for ${sendAt}.`,
     `Subject: ${subject}`,
+    link ? `:eyes: *Preview (always the current version):* ${link}` : null,
     `Post again to change it — I always use your latest message.`,
   ].filter(Boolean).join('\n'));
 }
@@ -1242,12 +1252,15 @@ async function processDavid(session, env, dryRun = false) {
 
   broadcastPayload.sendAt = sendAt;
   const broadcast = await createKitBroadcast(broadcastPayload, env);
+  await env.KV.put(`live:${session.key}`, String(broadcast.id), { expirationTtl: 4 * 86400 });
+  const link = env.WORKER_URL ? `${env.WORKER_URL}/preview?session=${session.key}&token=${env.PREVIEW_TOKEN || ''}` : null;
   await postToSlack(env, [
     usedDefault
       ? `:white_check_mark: *${session.label}* — Scheduled (generic — no update from David).`
       : `:white_check_mark: *${session.label}* — Scheduled. ${summary}`,
     `Subject: ${g.subject}`,
     `Sends at ${formatTime(session.sendHour, session.sendMinute)} ET.`,
+    link ? `:eyes: *Preview (always the current version):* ${link}` : null,
     `Reply *cancel* to stop it, or post a correction to change it.`,
   ].filter(Boolean).join('\n'));
   return { session: session.key, action: usedDefault ? 'scheduled_generic' : 'scheduled_with_update', broadcastId: broadcast.id };
@@ -1385,12 +1398,15 @@ async function processIBGS(session, env, dryRun = false) {
   // Optimistic: schedule it; the team reviews and corrects by message.
   broadcastPayload.sendAt = sendAt;
   const broadcast = await createKitBroadcast(broadcastPayload, env);
+  await env.KV.put(`live:${session.key}`, String(broadcast.id), { expirationTtl: 4 * 86400 });
+  const link = env.WORKER_URL ? `${env.WORKER_URL}/preview?session=${session.key}&token=${env.PREVIEW_TOKEN || ''}` : null;
   await postToSlack(env, [
     `:white_check_mark: *${session.label}* — Scheduled (auto-written from Lance's update).`,
     `Subject: ${gen.subject}`,
     `Header: ${gen.headerLine}`,
     `Exec summary: ${ibgsExecStatus(parsed)}`,
     `Sends at ${formatTime(session.sendHour, session.sendMinute)} ET.`,
+    link ? `:eyes: *Preview (always the current version):* ${link}` : null,
     `Reply *cancel* to stop it, or post a correction to change it.`,
   ].filter(Boolean).join('\n'));
   return { session: session.key, action: 'scheduled', broadcastId: broadcast.id };
