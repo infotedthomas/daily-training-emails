@@ -69,6 +69,18 @@
     color: #2c5f9e;
   }
 
+  .intro ul {
+    margin: 0 0 15px 25px;
+    padding: 0;
+  }
+
+  .intro ul li {
+    font-size: 16px;
+    line-height: 1.6;
+    color: #333;
+    margin-bottom: 8px;
+  }
+
   /* ========================================
      CTA SECTION
      ======================================== */
@@ -176,16 +188,22 @@
 
     <!-- HEADER -->
     <div class="header">
-      <h1 style="color: #ffffff;">Today's Live Session</h1>
-      <p style="color: #ffffff; opacity: 0.9;">Paying for Tax Sales with Credit Cards – What You Need to Know</p>
+      <h1 style="color: #ffffff;">Ted Thomas Friday Research Tutorial</h1>
+      <p style="color: #ffffff; opacity: 0.9;">How to Narrow Down an Auction List with Lance</p>
     </div>
 
     <!-- INTRO / CONTENT ABOVE BLUE LINE -->
     <div class="intro">
       <p>Hi {{ subscriber.first_name }},</p>
-      <p>By popular request, David is going live today at <strong>2:00 PM Eastern</strong> to answer one of the most common questions students have been asking: <strong>which states and counties accept credit cards at tax sales?</strong></p>
-      <p>Knowing your payment options before auction day can make a real difference in how you plan your bids and manage your capital. David will break down which jurisdictions accept credit cards, which ones don't, and what alternative payment methods you should be prepared for.</p>
-      <p>If you've been wondering where you can use a credit card to buy tax liens or tax deeds, this is the session to attend.</p>
+      <p>At 2PM today, Lance is going live to show you exactly how experienced investors narrow down an upcoming tax auction list.</p>
+      <p>This is where most people get overwhelmed. Hundreds of properties. Too much data. No clear system. Lance will walk you through the process step by step so you can quickly identify which properties deserve attention and which ones to skip.</p>
+      <p><strong>In today's session, you'll see how to:</strong></p>
+      <ul>
+        <li>Filter large auction lists fast</li>
+        <li>Focus on properties with real profit potential</li>
+        <li>Cut through the noise and work smarter</li>
+      </ul>
+      <p>This is practical, boots-on-the-ground training you can apply immediately. Bring your questions and follow along live at 2PM.</p>
     </div>
 
     <!-- CTA SECTION BELOW BLUE LINE -->
